@@ -1,4 +1,4 @@
-name: TBL Turbo Music Engine
+name: TBL Ultra Music Engine
 on:
   repository_dispatch:
     types: [process_music]
@@ -9,23 +9,23 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: 🛠 Setup FFmpeg
+      - name: 🛠 Setup Environment (FFmpeg)
         uses: federicocarboni/setup-ffmpeg@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 🚀 Setup yt-dlp
+      - name: 🚀 Install yt-dlp
         run: python3 -m pip install -U yt-dlp
 
-      - name: 📥 Advanced Extraction (Triple-Client Bypass)
+      - name: 📥 Advanced Extraction (Triple Bypass)
         id: dl
         env:
           QUERY: "${{ github.event.client_payload.query }}"
         run: |
-          # 1. Clean Query
+          # Clean Query but keep it descriptive
           CLEAN_QUERY=$(echo "$QUERY" | sed 's/[^a-zA-Z0-9 ]/ /g' | xargs)
           
-          # 2. Triple-Client Strategy (Android VR -> iOS -> SoundCloud)
+          # Try YouTube (Android VR Client) then SoundCloud
           yt-dlp "ytsearch1:$CLEAN_QUERY" \
             --extract-audio --audio-format mp3 --audio-quality 0 \
             --force-ipv4 --extractor-args "youtube:player_client=android_vr,ios" \
@@ -33,29 +33,54 @@ jobs:
             -o "track.mp3" --write-info-json || \
           yt-dlp "scsearch1:$QUERY" \
             --extract-audio --audio-format mp3 --audio-quality 0 \
-            -o "track.mp3" --write-info-json
+            --no-playlist -o "track.mp3" --write-info-json
 
-          if [ ! -f "track.mp3" ]; then exit 1; fi
+          if [ ! -f "track.mp3" ]; then echo "All sources failed" && exit 1; fi
 
-          # 3. Save Metadata
-          JSON_FILE=$(ls *.info.json | head -n 1)
-          echo "VID_ID=$(jq -r '.id' $JSON_FILE)" >> $GITHUB_ENV
-          echo "TITLE=$(jq -r '.title' $JSON_FILE | tr -d '\"' | head -c 100)" >> $GITHUB_ENV
-          echo "ARTIST=$(jq -r '.uploader // .artist' $JSON_FILE | tr -d '\"' | head -c 50)" >> $GITHUB_ENV
-          echo "DUR=$(jq -r '.duration_string' $JSON_FILE)" >> $GITHUB_ENV
-          echo "THUMB=$(jq -r '.thumbnail' $JSON_FILE)" >> $GITHUB_ENV
-
-      - name: ☁️ Upload to Telegram CDN
+      - name: ☁️ Pro-Shield Telegram Upload (Python)
+        id: tg_upload
+        env:
+          BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TG_DUMP_CHAT_ID }}
         run: |
-          RESPONSE=$(curl -s --http1.1 -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendAudio" \
-            -F chat_id="${{ secrets.TG_DUMP_CHAT_ID }}" \
-            -F audio=@"track.mp3" \
-            -F title="${{ env.TITLE }}" \
-            -F performer="${{ env.ARTIST }}")
+          python3 - <<EOF
+          import os, requests, json, sys
+
+          # Get metadata from the info.json file
+          json_files = [f for f in os.listdir('.') if f.endswith('.info.json')]
+          with open(json_files[0], 'r') as f:
+              data = json.load(f)
+
+          title = data.get('title', 'Unknown Title')[:100]
+          performer = (data.get('uploader') or data.get('artist') or 'Music Bot')[:50]
+          duration = data.get('duration_string', '0:00')
+          vid_id = data.get('id', '0')
+          thumb = data.get('thumbnail', '')
+
+          # Upload to Telegram
+          files = {'audio': open('track.mp3', 'rb')}
+          payload = {
+              'chat_id': os.environ['CHAT_ID'],
+              'title': title,
+              'performer': performer
+          }
           
-          FILE_ID=$(echo $RESPONSE | jq -r '.result.audio.file_id')
-          if [ "$FILE_ID" == "null" ] || [ -z "$FILE_ID" ]; then exit 1; fi
-          echo "FILE_ID=$FILE_ID" >> $GITHUB_ENV
+          url = f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendAudio"
+          r = requests.post(url, data=payload, files=files)
+          res = r.json()
+
+          if not res.get('ok'):
+              print(f"Telegram Error: {res}")
+              sys.exit(1)
+
+          # Pass values to GitHub Env
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f"FILE_ID={res['result']['audio']['file_id']}\n")
+              f.write(f"TITLE={title}\n")
+              f.write(f"DUR={duration}\n")
+              f.write(f"THUMB={thumb}\n")
+              f.write(f"VID_ID={vid_id}\n")
+          EOF
 
       - name: 📡 Success Callback (Cloudflare Stealth)
         if: success()
