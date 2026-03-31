@@ -9,25 +9,37 @@ jobs:
     timeout-minutes: 4
 
     steps:
-      - name: 🛠 Setup High-Speed Environment & JS Runtime
+      - name: 🛠 Setup High-Speed Environment
         run: |
           sudo apt-get update -qq
-          # ADDED nodejs to solve the JavaScript runtime warning
           sudo apt-get install -y -qq ffmpeg curl jq nodejs
-          
-          # Always fetch the absolute latest nightly build of yt-dlp to beat YouTube's updates
           sudo wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
 
-      - name: 📥 Download & Embed Metadata (Bypassing Bot Protection)
+      - name: 🍪 Load YouTube Cookies
+        run: |
+          # Loads the secret into a file that yt-dlp can read
+          cat << 'EOF' > cookies.txt
+          ${{ secrets.YT_COOKIES }}
+          EOF
+
+      - name: 📥 Download Engine (YT + Smart SC Fallback)
         id: process_audio
         run: |
           QUERY="${{ github.event.client_payload.query }}"
           echo "Processing: $QUERY"
 
-          # ADDED --force-ipv4 (GitHub IPv6 gets blocked easily)
-          # ADDED --extractor-args (Forces YouTube to think this is an iOS iPhone app, bypassing the "Sign In" block)
-          yt-dlp "ytsearch1:$QUERY" \
+          # 1. Determine if it's a direct Link or a Search
+          if [[ "$QUERY" == *"http"* ]]; then
+             TARGET="$QUERY"
+          else
+             TARGET="ytsearch1:$QUERY"
+          fi
+
+          # 2. ATTEMPT 1: Download from YouTube using Cookies
+          echo "Attempting YouTube..."
+          yt-dlp "$TARGET" \
+            --cookies cookies.txt \
             --extract-audio \
             --audio-format mp3 \
             --audio-quality 0 \
@@ -35,17 +47,38 @@ jobs:
             --embed-thumbnail \
             --match-filter "duration <= 900" \
             --force-ipv4 \
-            --extractor-args "youtube:player_client=ios,android" \
             --dump-json \
             --no-playlist \
-            -o "track.%(ext)s" > info.json
-          
-          # Parse Metadata safely using jq
+            -o "track.%(ext)s" > info.json || echo "YouTube Failed."
+
+          # 3. ATTEMPT 2: Smart Fallback to SoundCloud
+          # If YouTube failed (IP ban/expired cookies), and the user just typed a song name (e.g. "dil"),
+          # we silently switch the search to SoundCloud to ensure 100% uptime!
+          if [ ! -f "track.mp3" ]; then
+              echo "⚠️ YT Failed. Triggering SoundCloud Fallback Engine..."
+              
+              if [[ "$QUERY" != *"http"* ]]; then
+                  yt-dlp "scsearch1:$QUERY" \
+                    --extract-audio \
+                    --audio-format mp3 \
+                    --audio-quality 0 \
+                    --embed-metadata \
+                    --embed-thumbnail \
+                    --dump-json \
+                    --no-playlist \
+                    -o "track.%(ext)s" > info.json
+              else
+                  echo "Direct YouTube link failed. Check your YT_COOKIES secret."
+                  exit 1
+              fi
+          fi
+
+          # 4. Safely Parse Metadata for TBL
           VID_ID=$(jq -r '.id' info.json)
           TITLE=$(jq -r '.title' info.json | sed 's/"/\\"/g')
-          UPLOADER=$(jq -r '.uploader' info.json | sed 's/"/\\"/g')
-          DURATION=$(jq -r '.duration_string' info.json)
-          THUMB=$(jq -r '.thumbnail' info.json)
+          UPLOADER=$(jq -r '.uploader // .artist' info.json | sed 's/"/\\"/g')
+          DURATION=$(jq -r '.duration_string // "Unknown"' info.json)
+          THUMB=$(jq -r '.thumbnail // "NA"' info.json)
 
           echo "VID_ID=$VID_ID" >> $GITHUB_ENV
           echo "TITLE=$TITLE" >> $GITHUB_ENV
@@ -99,5 +132,5 @@ jobs:
             -d "{
               \"status\": \"error\",
               \"chat_id\": \"${{ github.event.client_payload.chat_id }}\",
-              \"error_message\": \"YouTube Blocked the request or track exceeds 15 minutes.\"
+              \"error_message\": \"Track unavailable or exceeds 15 minutes.\"
             }"
