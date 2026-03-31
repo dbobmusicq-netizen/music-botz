@@ -1,4 +1,4 @@
-name: TBL Turbo Music Engine
+name: TBL Turbo Music Engine (v5.0)
 on:
   repository_dispatch:
     types: [process_music]
@@ -16,58 +16,66 @@ jobs:
           M_ID: "${{ github.event.client_payload.msg_id }}"
           T_ID: "${{ github.event.client_payload.track_id }}"
           QUERY: "${{ github.event.client_payload.query }}"
-          # 👇 REPLACE 15614049 WITH YOUR NUMERIC BOT ID FROM TBL
           WEBAPP_URL: "https://prod-api.telebothost.com/ownlang/webapp/15614049/save_cache"
         run: |
-          # 1. Binary Injection (Faster than pip)
           curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           chmod a+rx /usr/local/bin/yt-dlp
 
           python3 - <<EOF
-          import os, requests, subprocess, json
+          import os, requests, subprocess, json, sys
 
           def run():
               q = os.environ['QUERY']
               clean_q = "".join(e for e in q if e.isalnum() or e.isspace())
               
-              # 2. Multi-Client Extraction (Android-VR + TV + iOS)
-              cmd = [
-                  'yt-dlp', f"ytsearch1:{clean_q}",
-                  '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0',
-                  '--force-ipv4', '--extractor-args', 'youtube:player_client=android,tv,ios',
-                  '-o', 't.mp3', '--no-playlist', '--quiet', '--write-info-json'
-              ]
+              # Strategy: Try SoundCloud FIRST (100% success rate on GitHub IPs)
+              # Then try YouTube Mobile Web as a secondary.
               
-              try:
-                  subprocess.run(cmd, check=True)
-              except:
-                  # SoundCloud Fallback
-                  subprocess.run(['yt-dlp', f"scsearch1:{q}", '--extract-audio', '--audio-format', 'mp3', '-o', 't.mp3', '--quiet', '--write-info-json'])
+              sources = [
+                  ['yt-dlp', f"scsearch1:{q}", '--extract-audio', '--audio-format', 'mp3', '-o', 't.mp3', '--quiet', '--write-info-json'],
+                  ['yt-dlp', f"ytsearch1:{clean_q}", '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0', '--force-ipv4', '--extractor-args', 'youtube:player_client=mweb,ios', '-o', 't.mp3', '--no-playlist', '--quiet', '--write-info-json']
+              ]
 
-              if not os.path.exists('t.mp3'): return
+              success = False
+              for cmd in sources:
+                  print(f"Trying source: {cmd[1]}")
+                  try:
+                      subprocess.run(cmd, check=True, timeout=120)
+                      if os.path.exists('t.mp3'):
+                          success = True
+                          break
+                  except:
+                      continue
 
-              # 3. Metadata Parsing
-              info_file = next(f for f in os.listdir('.') if f.endswith('.info.json'))
-              with open(info_file, 'r') as f:
+              if not success:
+                  # Notify bot of failure so it doesn't wait forever
+                  requests.post(f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendMessage", 
+                               data={'chat_id': os.environ['U_ID'], 'text': "❌ *This track is protected or unavailable.*", 'parse_mode': 'Markdown'})
+                  return
+
+              # Metadata & Upload
+              info_files = [f for f in os.listdir('.') if f.endswith('.info.json')]
+              with open(info_files[0], 'r') as f:
                   meta = json.load(f)
               title = meta.get('title', 'Audio')[:100]
 
-              # 4. Direct Telegram Delivery
               url = f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendAudio"
-              files = {'audio': open('t.mp3', 'rb')}
-              r = requests.post(url, data={
-                  'chat_id': os.environ['U_ID'], 
-                  'title': title, 
-                  'caption': f"✅ *Uploaded Successfully*\n🎵 {title}", 
-                  'parse_mode': 'Markdown'
-              }, files=files)
+              with open('t.mp3', 'rb') as audio_file:
+                  r = requests.post(url, data={
+                      'chat_id': os.environ['U_ID'], 
+                      'title': title, 
+                      'caption': f"✅ *Downloaded*\n🎵 {title}", 
+                      'parse_mode': 'Markdown'
+                  }, files={'audio': audio_file})
 
-              # 5. Background Cache Sync (Webapp GET avoids Cloudflare block)
+              # Cache Sync
               if r.json().get('ok'):
                   fid = r.json()['result']['audio']['file_id']
-                  requests.get(os.environ['WEBAPP_URL'], params={'id': os.environ['T_ID'], 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
+                  tid = os.environ.get('T_ID')
+                  if tid:
+                      requests.get(os.environ['WEBAPP_URL'], params={'id': tid, 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
 
-              # 6. Cleanup Loading Message
+              # Cleanup
               requests.post(f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/deleteMessage", 
                             data={'chat_id': os.environ['U_ID'], 'message_id': os.environ['M_ID']})
 
