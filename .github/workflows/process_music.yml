@@ -1,4 +1,4 @@
-name: TBL Premium Music Engine
+name: TBL Ultra Music Engine
 on:
   repository_dispatch:
     types: [process_music]
@@ -6,120 +6,82 @@ on:
 jobs:
   download-and-process:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 5
 
     steps:
-      - name: 🛠 Setup High-Speed Environment
+      - name: 🛠 Setup Pro Environment
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg curl jq nodejs
           sudo wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
 
-      - name: 🍪 Load YouTube Cookies
-        run: |
-          cat << 'EOF' > cookies.txt
-          ${{ secrets.YT_COOKIES }}
-          EOF
-
-      - name: 📥 Download Engine (YT + SC Fallback)
-        id: process_audio
+      - name: 📥 Multi-Source Downloader (YT-TV + YT-iOS + SC)
+        id: dl
         run: |
           QUERY="${{ github.event.client_payload.query }}"
           echo "Processing: $QUERY"
 
-          if [[ "$QUERY" == *"http"* ]]; then
-             TARGET="$QUERY"
-          else
-             TARGET="ytsearch1:$QUERY"
-          fi
+          # ATTEMPT 1: YouTube TV Client (Best Bypass for "Sign in" error)
+          echo "Trying YouTube TV..."
+          yt-dlp "ytsearch1:$QUERY" \
+            --extract-audio --audio-format mp3 --audio-quality 0 \
+            --force-ipv4 --extractor-args "youtube:player_client=tv,web" \
+            --no-playlist -o "track.mp3" --write-info-json || echo "YT-TV Failed"
 
-          yt-dlp "$TARGET" \
-            --cookies cookies.txt \
-            --extract-audio \
-            --audio-format mp3 \
-            --audio-quality 0 \
-            --embed-metadata \
-            --embed-thumbnail \
-            --match-filter "duration <= 900" \
-            --force-ipv4 \
-            --dump-json \
-            --no-playlist \
-            -o "track.%(ext)s" > info.json || echo "YouTube Failed."
-
+          # ATTEMPT 2: YouTube iOS Fallback
           if [ ! -f "track.mp3" ]; then
-              echo "⚠️ YT Failed. Triggering SoundCloud Fallback..."
-              if [[ "$QUERY" != *"http"* ]]; then
-                  yt-dlp "scsearch1:$QUERY" \
-                    --extract-audio \
-                    --audio-format mp3 \
-                    --audio-quality 0 \
-                    --embed-metadata \
-                    --embed-thumbnail \
-                    --dump-json \
-                    --no-playlist \
-                    -o "track.%(ext)s" > info.json
-              else
-                  exit 1
-              fi
+            echo "Trying YouTube iOS..."
+            yt-dlp "ytsearch1:$QUERY" \
+              --extract-audio --audio-format mp3 --audio-quality 0 \
+              --force-ipv4 --extractor-args "youtube:player_client=ios" \
+              --no-playlist -o "track.mp3" --write-info-json || echo "YT-iOS Failed"
           fi
 
-          VID_ID=$(jq -r '.id' info.json)
-          TITLE=$(jq -r '.title' info.json | sed 's/"/\\"/g')
-          UPLOADER=$(jq -r '.uploader // .artist' info.json | sed 's/"/\\"/g')
-          DURATION=$(jq -r '.duration_string // "Unknown"' info.json)
-          THUMB=$(jq -r '.thumbnail // "NA"' info.json)
+          # ATTEMPT 3: SoundCloud Ultimate Fallback
+          if [ ! -f "track.mp3" ]; then
+            echo "Trying SoundCloud..."
+            yt-dlp "scsearch1:$QUERY" \
+              --extract-audio --audio-format mp3 --audio-quality 0 \
+              --no-playlist -o "track.mp3" --write-info-json
+          fi
 
-          echo "VID_ID=$VID_ID" >> $GITHUB_ENV
-          echo "TITLE=$TITLE" >> $GITHUB_ENV
-          echo "UPLOADER=$UPLOADER" >> $GITHUB_ENV
-          echo "DURATION=$DURATION" >> $GITHUB_ENV
-          echo "THUMB=$THUMB" >> $GITHUB_ENV
+          # Verify if file exists
+          if [ ! -f "track.mp3" ]; then echo "All sources failed" && exit 1; fi
 
-      - name: ☁️ Upload to Telegram Zero-Cost CDN
-        id: upload_tg
+          # Extract Metadata carefully
+          # We use a temp file to avoid "Exit Code 26" errors with special characters
+          JSON_FILE=$(ls *.info.json | head -n 1)
+          echo "VID_ID=$(jq -r '.id' $JSON_FILE)" >> $GITHUB_ENV
+          echo "TITLE=$(jq -r '.title' $JSON_FILE | tr -d '\"' | cut -c1-100)" >> $GITHUB_ENV
+          echo "ARTIST=$(jq -r '.uploader // .artist' $JSON_FILE | tr -d '\"' | cut -c1-50)" >> $GITHUB_ENV
+          echo "DUR=$(jq -r '.duration_string' $JSON_FILE)" >> $GITHUB_ENV
+          echo "THUMB=$(jq -r '.thumbnail' $JSON_FILE)" >> $GITHUB_ENV
+
+      - name: ☁️ Upload to Telegram CDN
         run: |
-          BOT_TOKEN="${{ secrets.TG_BOT_TOKEN }}"
-          DUMP_CHAT_ID="${{ secrets.TG_DUMP_CHAT_ID }}"
-          
-          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendAudio" \
-            -F chat_id="$DUMP_CHAT_ID" \
+          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendAudio" \
+            -F chat_id="${{ secrets.TG_DUMP_CHAT_ID }}" \
             -F audio=@"track.mp3" \
             -F title="${{ env.TITLE }}" \
-            -F performer="${{ env.UPLOADER }}")
-            
+            -F performer="${{ env.ARTIST }}")
+          
           FILE_ID=$(echo $RESPONSE | jq -r '.result.audio.file_id')
-          if [ "$FILE_ID" == "null" ] || [ -z "$FILE_ID" ]; then
-            exit 1
-          fi
+          if [ "$FILE_ID" == "null" ]; then echo "TG Upload Failed" && exit 1; fi
           echo "FILE_ID=$FILE_ID" >> $GITHUB_ENV
 
-      - name: 📡 Success Callback to TBL Bot
+      - name: 📡 Success Callback (Cloudflare Breaker)
         if: success()
         run: |
           curl -s -X POST "${{ github.event.client_payload.callback_url }}" \
             -H "Content-Type: application/json" \
-            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/123.0.0.0 Safari/537.36" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
             -d "{
               \"status\": \"success\",
               \"chat_id\": \"${{ github.event.client_payload.chat_id }}\",
-              \"user_id\": \"${{ github.event.client_payload.user_id }}\",
-              \"user_name\": \"${{ github.event.client_payload.user_name }}\",
               \"video_id\": \"${{ env.VID_ID }}\",
               \"file_id\": \"${{ env.FILE_ID }}\",
               \"title\": \"${{ env.TITLE }}\",
-              \"duration\": \"${{ env.DURATION }}\",
+              \"duration\": \"${{ env.DUR }}\",
               \"thumbnail\": \"${{ env.THUMB }}\"
-            }"
-
-      - name: ❌ Failure Callback to TBL Bot
-        if: failure()
-        run: |
-          curl -s -X POST "${{ github.event.client_payload.callback_url }}" \
-            -H "Content-Type: application/json" \
-            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/123.0.0.0 Safari/537.36" \
-            -d "{
-              \"status\": \"error\",
-              \"chat_id\": \"${{ github.event.client_payload.chat_id }}\",
-              \"error_message\": \"Track unavailable or exceeds 15 minutes.\"
             }"
