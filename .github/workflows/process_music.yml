@@ -1,4 +1,4 @@
-name: TBL Ultra Music Engine (Direct Delivery + Caching)
+name: TBL Ultra Music Engine (Instant Delivery)
 on:
   repository_dispatch:
     types: [process_music]
@@ -34,7 +34,7 @@ jobs:
 
           if [ ! -f "track.mp3" ]; then exit 1; fi
 
-      - name: ☁️ Storage-First Delivery & Caching
+      - name: ☁️ Storage Delivery & Caching
         id: tg_pro
         env:
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
@@ -42,6 +42,7 @@ jobs:
           USER_CHAT_ID: "${{ github.event.client_payload.chat_id }}"
           MSG_ID: "${{ github.event.client_payload.msg_id }}"
           TRACK_ID: "${{ github.event.client_payload.track_id }}"
+          # 👇 REPLACE YOUR_BOT_ID WITH YOUR ACTUAL NUMERIC BOT ID
           WEBAPP_URL: "https://prod-api.telebothost.com/ownlang/webapp/15614049/save_cache"
         run: |
           python3 - <<EOF
@@ -60,7 +61,7 @@ jobs:
               data = json.load(f)
           title = data.get('title', 'Unknown')[:100]
 
-          # 2. UPLOAD TO STORAGE CHANNEL
+          # 2. UPLOAD TO STORAGE CHANNEL (To get permanent file_id)
           files = {'audio': open('track.mp3', 'rb')}
           url_tg = f"https://api.telegram.org/bot{bot_token}/sendAudio"
           r_dump = requests.post(url_tg, data={'chat_id': dump_id, 'title': title}, files=files)
@@ -76,12 +77,9 @@ jobs:
                   'parse_mode': 'Markdown'
               })
 
-              # 4. UPDATE BOT CACHE & MOVE QUEUE (Added 'cid' parameter)
-              print(f"Syncing back to TBL for Chat ID: {user_id}")
-              cache_params = {'id': track_id, 'file': perm_file_id, 'cid': user_id}
-              requests.get(webapp_base, params=cache_params, headers={"User-Agent": "Mozilla/5.0"})
+              # 4. UPDATE BOT CACHE
+              requests.get(webapp_base, params={'id': track_id, 'file': perm_file_id}, headers={"User-Agent": "Mozilla/5.0"})
           
-          # 5. CLEANUP LOADING MESSAGE
-          requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", 
-                        data={'chat_id': user_id, 'message_id': msg_id})
+          # 5. DELETE LOADING MESSAGE
+          requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", data={'chat_id': user_id, 'message_id': msg_id})
           EOF
