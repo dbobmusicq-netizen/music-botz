@@ -1,4 +1,4 @@
-name: TBL Turbo Music Engine (v5.0)
+name: TBL Ultra Music Engine (Unblockable v6.0)
 on:
   repository_dispatch:
     types: [process_music]
@@ -26,21 +26,28 @@ jobs:
 
           def run():
               q = os.environ['QUERY']
+              # We clean the query only for YouTube search to be more specific
               clean_q = "".join(e for e in q if e.isalnum() or e.isspace())
               
-              # Strategy: Try SoundCloud FIRST (100% success rate on GitHub IPs)
-              # Then try YouTube Mobile Web as a secondary.
-              
+              # THE ULTIMATE BYPASS LIST
+              # We try 6 different clients and 2 platforms (YT + SC)
               sources = [
+                  # 1. YouTube Android VR Client (Currently the strongest bypass)
+                  ['yt-dlp', f"ytsearch1:{q}", '--extract-audio', '--audio-format', 'mp3', '--force-ipv4', '--extractor-args', 'youtube:player_client=android_vr,ios', '-o', 't.mp3', '--no-playlist', '--quiet', '--write-info-json'],
+                  # 2. SoundCloud Primary (100% working on GitHub IPs)
                   ['yt-dlp', f"scsearch1:{q}", '--extract-audio', '--audio-format', 'mp3', '-o', 't.mp3', '--quiet', '--write-info-json'],
-                  ['yt-dlp', f"ytsearch1:{clean_q}", '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0', '--force-ipv4', '--extractor-args', 'youtube:player_client=mweb,ios', '-o', 't.mp3', '--no-playlist', '--quiet', '--write-info-json']
+                  # 3. YouTube TV Client Fallback
+                  ['yt-dlp', f"ytsearch1:{clean_q}", '--extract-audio', '--audio-format', 'mp3', '--force-ipv4', '--extractor-args', 'youtube:player_client=tv,web', '-o', 't.mp3', '--no-playlist', '--quiet', '--write-info-json'],
+                  # 4. YouTube Mobile Web Fallback
+                  ['yt-dlp', f"ytsearch1:{clean_q}", '--extract-audio', '--audio-format', 'mp3', '--force-ipv4', '--extractor-args', 'youtube:player_client=mweb,android', '-o', 't.mp3', '--no-playlist', '--quiet', '--write-info-json']
               ]
 
               success = False
               for cmd in sources:
                   print(f"Trying source: {cmd[1]}")
                   try:
-                      subprocess.run(cmd, check=True, timeout=120)
+                      # Increased timeout to allow for slow YouTube challenges
+                      subprocess.run(cmd, check=True, timeout=180)
                       if os.path.exists('t.mp3'):
                           success = True
                           break
@@ -48,12 +55,20 @@ jobs:
                       continue
 
               if not success:
-                  # Notify bot of failure so it doesn't wait forever
                   requests.post(f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendMessage", 
-                               data={'chat_id': os.environ['U_ID'], 'text': "❌ *This track is protected or unavailable.*", 'parse_mode': 'Markdown'})
+                               data={'chat_id': os.environ['U_ID'], 'text': "❌ *System Alert:* High-level protection detected. Trying emergency bypass...", 'parse_mode': 'Markdown'})
+                  # FINAL EMERGENCY ATTEMPT: Raw Search without formats
+                  try:
+                      subprocess.run(['yt-dlp', f"ytsearch1:{q}", '-x', '--audio-format', 'mp3', '--no-check-certificates', '-o', 't.mp3', '--quiet', '--write-info-json'], check=True)
+                      if os.path.exists('t.mp3'): success = True
+                  except: pass
+
+              if not success:
+                  requests.post(f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendMessage", 
+                               data={'chat_id': os.environ['U_ID'], 'text': "❌ *Failed:* YouTube is strictly blocking datacenter IPs. Please try again in a few minutes.", 'parse_mode': 'Markdown'})
                   return
 
-              # Metadata & Upload
+              # --- SUCCESS: DELIVER AND CACHE ---
               info_files = [f for f in os.listdir('.') if f.endswith('.info.json')]
               with open(info_files[0], 'r') as f:
                   meta = json.load(f)
@@ -64,15 +79,15 @@ jobs:
                   r = requests.post(url, data={
                       'chat_id': os.environ['U_ID'], 
                       'title': title, 
-                      'caption': f"✅ *Downloaded*\n🎵 {title}", 
+                      'caption': f"✅ *Successfully Bypassed!*\n🎵 {title}", 
                       'parse_mode': 'Markdown'
                   }, files={'audio': audio_file})
 
-              # Cache Sync
+              # Cache Update (Ensures T_ID exists)
               if r.json().get('ok'):
                   fid = r.json()['result']['audio']['file_id']
                   tid = os.environ.get('T_ID')
-                  if tid:
+                  if tid and tid != "undefined":
                       requests.get(os.environ['WEBAPP_URL'], params={'id': tid, 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
 
               # Cleanup
