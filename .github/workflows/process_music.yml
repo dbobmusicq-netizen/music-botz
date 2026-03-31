@@ -1,85 +1,75 @@
-name: TBL Ultra Music Engine (Instant Delivery)
+name: TBL Turbo Music Engine
 on:
   repository_dispatch:
     types: [process_music]
 
 jobs:
-  download-and-process:
+  turbo-process:
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: 🛠 Setup Environment (FFmpeg)
-        uses: federicocarboni/setup-ffmpeg@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 🚀 Install yt-dlp & Requests
-        run: python3 -m pip install -U yt-dlp requests
-
-      - name: 📥 Advanced Extraction
-        id: dl
-        env:
-          QUERY: "${{ github.event.client_payload.query }}"
-        run: |
-          CLEAN_QUERY=$(echo "$QUERY" | sed 's/[^a-zA-Z0-9 ]/ /g' | xargs)
-          yt-dlp "ytsearch1:$CLEAN_QUERY" \
-            --extract-audio --audio-format mp3 --audio-quality 0 \
-            --force-ipv4 --extractor-args "youtube:player_client=android_vr,ios" \
-            --no-playlist --no-check-certificates --no-warnings \
-            -o "track.mp3" --write-info-json || \
-          yt-dlp "scsearch1:$QUERY" \
-            --extract-audio --audio-format mp3 --audio-quality 0 \
-            --no-playlist -o "track.mp3" --write-info-json
-
-          if [ ! -f "track.mp3" ]; then exit 1; fi
-
-      - name: ☁️ Storage Delivery & Caching
-        id: tg_pro
+      - name: ⚡ High-Speed Execution
         env:
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          DUMP_CHAT_ID: ${{ secrets.TG_DUMP_CHAT_ID }}
-          USER_CHAT_ID: "${{ github.event.client_payload.chat_id }}"
-          MSG_ID: "${{ github.event.client_payload.msg_id }}"
-          TRACK_ID: "${{ github.event.client_payload.track_id }}"
-          # 👇 REPLACE YOUR_BOT_ID WITH YOUR ACTUAL NUMERIC BOT ID
+          U_ID: "${{ github.event.client_payload.chat_id }}"
+          M_ID: "${{ github.event.client_payload.msg_id }}"
+          T_ID: "${{ github.event.client_payload.track_id }}"
+          QUERY: "${{ github.event.client_payload.query }}"
+          # 👇 REPLACE 15614049 WITH YOUR NUMERIC BOT ID FROM TBL
           WEBAPP_URL: "https://prod-api.telebothost.com/ownlang/webapp/15614049/save_cache"
         run: |
+          # 1. Binary Injection (Faster than pip)
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          chmod a+rx /usr/local/bin/yt-dlp
+
           python3 - <<EOF
-          import os, requests, json, sys
+          import os, requests, subprocess, json
 
-          bot_token = os.environ['BOT_TOKEN']
-          user_id = os.environ['USER_CHAT_ID']
-          dump_id = os.environ['DUMP_CHAT_ID']
-          msg_id = os.environ['MSG_ID']
-          track_id = os.environ['TRACK_ID']
-          webapp_base = os.environ['WEBAPP_URL']
-
-          # 1. GET METADATA
-          json_files = [f for f in os.listdir('.') if f.endswith('.info.json')]
-          with open(json_files[0], 'r') as f:
-              data = json.load(f)
-          title = data.get('title', 'Unknown')[:100]
-
-          # 2. UPLOAD TO STORAGE CHANNEL (To get permanent file_id)
-          files = {'audio': open('track.mp3', 'rb')}
-          url_tg = f"https://api.telegram.org/bot{bot_token}/sendAudio"
-          r_dump = requests.post(url_tg, data={'chat_id': dump_id, 'title': title}, files=files)
-          
-          if r_dump.json().get('ok'):
-              perm_file_id = r_dump.json()['result']['audio']['file_id']
+          def run():
+              q = os.environ['QUERY']
+              clean_q = "".join(e for e in q if e.isalnum() or e.isspace())
               
-              # 3. FORWARD TO USER
-              requests.post(url_tg, data={
-                  'chat_id': user_id, 
-                  'audio': perm_file_id, 
-                  'caption': f"✅ *Success!*\n🎵 {title}", 
-                  'parse_mode': 'Markdown'
-              })
+              # 2. Multi-Client Extraction (Android-VR + TV + iOS)
+              cmd = [
+                  'yt-dlp', f"ytsearch1:{clean_q}",
+                  '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0',
+                  '--force-ipv4', '--extractor-args', 'youtube:player_client=android,tv,ios',
+                  '-o', 't.mp3', '--no-playlist', '--quiet', '--write-info-json'
+              ]
+              
+              try:
+                  subprocess.run(cmd, check=True)
+              except:
+                  # SoundCloud Fallback
+                  subprocess.run(['yt-dlp', f"scsearch1:{q}", '--extract-audio', '--audio-format', 'mp3', '-o', 't.mp3', '--quiet', '--write-info-json'])
 
-              # 4. UPDATE BOT CACHE
-              requests.get(webapp_base, params={'id': track_id, 'file': perm_file_id}, headers={"User-Agent": "Mozilla/5.0"})
-          
-          # 5. DELETE LOADING MESSAGE
-          requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", data={'chat_id': user_id, 'message_id': msg_id})
+              if not os.path.exists('t.mp3'): return
+
+              # 3. Metadata Parsing
+              info_file = next(f for f in os.listdir('.') if f.endswith('.info.json'))
+              with open(info_file, 'r') as f:
+                  meta = json.load(f)
+              title = meta.get('title', 'Audio')[:100]
+
+              # 4. Direct Telegram Delivery
+              url = f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendAudio"
+              files = {'audio': open('t.mp3', 'rb')}
+              r = requests.post(url, data={
+                  'chat_id': os.environ['U_ID'], 
+                  'title': title, 
+                  'caption': f"✅ *Uploaded Successfully*\n🎵 {title}", 
+                  'parse_mode': 'Markdown'
+              }, files=files)
+
+              # 5. Background Cache Sync (Webapp GET avoids Cloudflare block)
+              if r.json().get('ok'):
+                  fid = r.json()['result']['audio']['file_id']
+                  requests.get(os.environ['WEBAPP_URL'], params={'id': os.environ['T_ID'], 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
+
+              # 6. Cleanup Loading Message
+              requests.post(f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/deleteMessage", 
+                            data={'chat_id': os.environ['U_ID'], 'message_id': os.environ['M_ID']})
+
+          run()
           EOF
