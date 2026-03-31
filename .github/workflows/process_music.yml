@@ -1,4 +1,4 @@
-name: TBL Ultra Music Engine
+name: TBL Turbo Music Engine
 on:
   repository_dispatch:
     types: [process_music]
@@ -9,37 +9,35 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: 🛠 Setup Environment (FFmpeg + yt-dlp)
+      - name: 🛠 Setup FFmpeg
         uses: federicocarboni/setup-ffmpeg@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 🚀 Install yt-dlp
+      - name: 🚀 Setup yt-dlp
         run: python3 -m pip install -U yt-dlp
 
-      - name: 📥 Advanced Extraction (Triple Bypass)
+      - name: 📥 Advanced Extraction (Triple-Client Bypass)
         id: dl
         env:
           QUERY: "${{ github.event.client_payload.query }}"
         run: |
           # 1. Clean Query
           CLEAN_QUERY=$(echo "$QUERY" | sed 's/[^a-zA-Z0-9 ]/ /g' | xargs)
-          echo "Cleaned Query: $CLEAN_QUERY"
-
-          # 2. Multi-Source Strategy
-          # Try YouTube (Android VR/TV Client) then SoundCloud
+          
+          # 2. Triple-Client Strategy (Android VR -> iOS -> SoundCloud)
           yt-dlp "ytsearch1:$CLEAN_QUERY" \
             --extract-audio --audio-format mp3 --audio-quality 0 \
-            --force-ipv4 --extractor-args "youtube:player_client=android,tv" \
+            --force-ipv4 --extractor-args "youtube:player_client=android_vr,ios" \
             --no-playlist --no-check-certificates --no-warnings \
             -o "track.mp3" --write-info-json || \
           yt-dlp "scsearch1:$QUERY" \
             --extract-audio --audio-format mp3 --audio-quality 0 \
-            --no-playlist -o "track.mp3" --write-info-json
+            -o "track.mp3" --write-info-json
 
-          if [ ! -f "track.mp3" ]; then echo "All sources failed" && exit 1; fi
+          if [ ! -f "track.mp3" ]; then exit 1; fi
 
-          # 3. Extract Metadata
+          # 3. Save Metadata
           JSON_FILE=$(ls *.info.json | head -n 1)
           echo "VID_ID=$(jq -r '.id' $JSON_FILE)" >> $GITHUB_ENV
           echo "TITLE=$(jq -r '.title' $JSON_FILE | tr -d '\"' | head -c 100)" >> $GITHUB_ENV
@@ -47,7 +45,7 @@ jobs:
           echo "DUR=$(jq -r '.duration_string' $JSON_FILE)" >> $GITHUB_ENV
           echo "THUMB=$(jq -r '.thumbnail' $JSON_FILE)" >> $GITHUB_ENV
 
-      - name: ☁️ Fast Telegram Upload
+      - name: ☁️ Upload to Telegram CDN
         run: |
           RESPONSE=$(curl -s --http1.1 -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendAudio" \
             -F chat_id="${{ secrets.TG_DUMP_CHAT_ID }}" \
