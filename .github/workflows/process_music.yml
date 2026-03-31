@@ -1,4 +1,4 @@
-name: TBL Ultra Music Engine
+name: TBL Ultra Music Engine (Direct Delivery)
 on:
   repository_dispatch:
     types: [process_music]
@@ -14,10 +14,10 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 🚀 Install yt-dlp
+      - name: 🚀 Install yt-dlp & Requests
         run: python3 -m pip install -U yt-dlp requests
 
-      - name: 📥 Advanced Extraction (Triple Bypass)
+      - name: 📥 Advanced Extraction
         id: dl
         env:
           QUERY: "${{ github.event.client_payload.query }}"
@@ -35,12 +35,11 @@ jobs:
 
           if [ ! -f "track.mp3" ]; then echo "All sources failed" && exit 1; fi
 
-      - name: ☁️ Pro-Shield Upload & Callback
+      - name: ☁️ Direct Delivery to User (Bypassing Cloudflare)
         id: tg_pro
         env:
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.TG_DUMP_CHAT_ID }}
-          CALLBACK_URL: "${{ github.event.client_payload.callback_url }}"
+          DUMP_CHAT_ID: ${{ secrets.TG_DUMP_CHAT_ID }}
           USER_CHAT_ID: "${{ github.event.client_payload.chat_id }}"
           MSG_ID: "${{ github.event.client_payload.msg_id }}"
         run: |
@@ -55,51 +54,37 @@ jobs:
           title = data.get('title', 'Unknown Title')[:100]
           performer = (data.get('uploader') or data.get('artist') or 'Music Bot')[:50]
           duration = data.get('duration_string', '0:00')
-          vid_id = data.get('id', '0')
-          thumb = data.get('thumbnail', '')
 
-          # 2. UPLOAD TO TELEGRAM DUMP CHANNEL
+          bot_token = os.environ['BOT_TOKEN']
+          user_id = os.environ['USER_CHAT_ID']
+          dump_id = os.environ['DUMP_CHAT_ID']
+          msg_id = os.environ['MSG_ID']
+
+          # 2. UPLOAD DIRECTLY TO THE USER
+          print(f"Delivering song to User: {user_id}...")
           files = {'audio': open('track.mp3', 'rb')}
-          payload = {'chat_id': os.environ['CHAT_ID'], 'title': title, 'performer': performer}
-          url_tg = f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendAudio"
-          
-          r_tg = requests.post(url_tg, data=payload, files=files)
-          res_tg = r_tg.json()
-
-          if not res_tg.get('ok'):
-              print(f"Telegram Upload Failed: {res_tg}")
-              sys.exit(1)
-
-          file_id = res_tg['result']['audio']['file_id']
-          print(f"Successfully uploaded! File ID: {file_id}")
-
-          # 3. DISGUISED CALLBACK TO TBL (BYPASSING CLOUDFLARE)
-          # We use realistic Browser Headers to avoid the "Just a moment" block
-          headers = {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-              "Accept": "application/json, text/plain, */*",
-              "Content-Type": "application/json",
-              "Referer": "https://www.google.com/"
+          payload = {
+              'chat_id': user_id, 
+              'title': title, 
+              'performer': 'Ultra Music Engine',
+              'caption': f"✅ *Track Found!*\n🎵 *{title}*\n⏱ {duration}",
+              'parse_mode': 'Markdown'
           }
-
-          callback_data = {
-              "status": "success",
-              "chat_id": os.environ['USER_CHAT_ID'],
-              "mid": os.environ['MSG_ID'],
-              "video_id": vid_id,
-              "file_id": file_id,
-              "title": title,
-              "duration": duration,
-              "thumbnail": thumb
-          }
-
-          print("Sending callback to TBL...")
-          r_cb = requests.post(os.environ['CALLBACK_URL'], headers=headers, json=callback_data)
           
-          if r_cb.status_code == 200:
-              print("✅ Callback Successful!")
+          url_send = f"https://api.telegram.org/bot{bot_token}/sendAudio"
+          r_send = requests.post(url_send, data=payload, files=files)
+          
+          if r_send.json().get('ok'):
+              print("✅ Song delivered to user successfully!")
+              # ALSO upload to dump channel for your records
+              requests.post(url_send, data={'chat_id': dump_id, 'title': title}, files={'audio': open('track.mp3', 'rb')})
           else:
-              print(f"❌ Callback Failed with Status {r_cb.status_code}")
-              print(f"Cloudflare Response: {r_cb.text[:500]}")
+              print(f"❌ Failed to send to user: {r_send.text}")
               sys.exit(1)
+
+          # 3. DELETE THE "PROCESSING" MESSAGE IN THE BOT
+          print(f"Cleaning up loading message {msg_id}...")
+          url_del = f"https://api.telegram.org/bot{bot_token}/deleteMessage"
+          requests.post(url_del, data={'chat_id': user_id, 'message_id': msg_id})
+          
           EOF
