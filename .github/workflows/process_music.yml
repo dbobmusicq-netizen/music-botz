@@ -14,41 +14,34 @@ jobs:
 
       - name: 📥 Advanced Extraction (Android-VR Bypass)
         id: dl
+        # We put the query in env to prevent shell syntax errors
+        env:
+          QUERY: "${{ github.event.client_payload.query }}"
         run: |
-          # 1. Clean the query (Removes symbols like & - | that break searches)
-          RAW_QUERY="${{ github.event.client_payload.query }}"
-          CLEAN_QUERY=$(echo "$RAW_QUERY" | sed 's/[^a-zA-Z0-9 ]/ /g' | xargs)
+          # 1. Clean the query safely using environment variables
+          CLEAN_QUERY=$(echo "$QUERY" | sed 's/[^a-zA-Z0-9 ]/ /g' | xargs)
           echo "Cleaned Query: $CLEAN_QUERY"
 
           # 2. Triple-Client Download Strategy
-          # - Try Android VR Client (Best Bypass)
-          # - Try iOS Client
-          # - Fallback to SoundCloud
-          
+          # Using android_vr client to bypass "Sign in" block
           yt-dlp "ytsearch1:$CLEAN_QUERY" \
             --extract-audio --audio-format mp3 --audio-quality 0 \
             --force-ipv4 --extractor-args "youtube:player_client=android_vr,ios" \
             --user-agent "Mozilla/5.0 (Android 14; Mobile; rv:124.0) Gecko/124.0 Firefox/124.0" \
             --no-playlist --no-check-certificates --no-warnings \
             -o "track.mp3" --write-info-json || \
-          yt-dlp "ytsearch1:$RAW_QUERY" \
-            --extract-audio --audio-format mp3 --audio-quality 0 \
-            --force-ipv4 --extractor-args "youtube:player_client=tv,web" \
-            -o "track.mp3" --write-info-json || \
           yt-dlp "scsearch1:$CLEAN_QUERY" \
             --extract-audio --audio-format mp3 --audio-quality 0 \
-            -o "track.mp3" --write-info-json
+            --no-playlist -o "track.mp3" --write-info-json
 
           if [ ! -f "track.mp3" ]; then echo "All sources failed" && exit 1; fi
 
-          # 3. Clean Metadata Extraction (Prevents JSON crashes)
+          # 3. Extract Metadata into ENV
           JSON_FILE=$(ls *.info.json | head -n 1)
-          TITLE=$(jq -r '.title' $JSON_FILE | tr -d '\"' | head -c 100)
-          ARTIST=$(jq -r '.uploader // .artist' $JSON_FILE | tr -d '\"' | head -c 50)
-          
+          # We use jq to clean titles of quotes and dangerous characters
           echo "VID_ID=$(jq -r '.id' $JSON_FILE)" >> $GITHUB_ENV
-          echo "TITLE=$TITLE" >> $GITHUB_ENV
-          echo "ARTIST=$ARTIST" >> $GITHUB_ENV
+          echo "TITLE=$(jq -r '.title' $JSON_FILE | tr -d '\"' | head -c 100)" >> $GITHUB_ENV
+          echo "ARTIST=$(jq -r '.uploader // .artist' $JSON_FILE | tr -d '\"' | head -c 50)" >> $GITHUB_ENV
           echo "DUR=$(jq -r '.duration_string' $JSON_FILE)" >> $GITHUB_ENV
           echo "THUMB=$(jq -r '.thumbnail' $JSON_FILE)" >> $GITHUB_ENV
 
