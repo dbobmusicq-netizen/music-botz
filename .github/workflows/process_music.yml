@@ -1,35 +1,22 @@
-name: TBL Premium Music Engine
-on:
-  repository_dispatch:
-    types: [process_music]
-
-jobs:
-  download-and-process:
-    runs-on: ubuntu-latest
-    timeout-minutes: 4 # Pro feature: Kills hanging jobs so you don't waste free GH minutes
-
-    steps:
-      - name: 🛠 Setup High-Speed Environment
+steps:
+      - name: 🛠 Setup High-Speed Environment & JS Runtime
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg curl jq
-          # Use the nightly build of yt-dlp for the latest cipher bypasses
+          # ADDED nodejs to solve the JavaScript runtime warning
+          sudo apt-get install -y -qq ffmpeg curl jq nodejs
+          
+          # Always fetch the absolute latest nightly build of yt-dlp to beat YouTube's updates
           sudo wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
 
-      - name: 📥 Download & Embed Metadata
+      - name: 📥 Download & Embed Metadata (Bypassing Bot Protection)
         id: process_audio
         run: |
-          # 1. Sanitize the input query
           QUERY="${{ github.event.client_payload.query }}"
           echo "Processing: $QUERY"
 
-          # 2. Download Audio + Dump JSON + Embed Cover Art/ID3 Tags
-          # PRO FEATURES:
-          # - match-filter: Rejects videos over 15 mins (900s) to prevent Telegram 50MB API limits
-          # - embed-thumbnail: Makes the MP3 look premium in Telegram with album art
-          # - audio-quality 0: Best possible VBR quality (320kbps equivalent)
-          
+          # ADDED --force-ipv4 (GitHub IPv6 gets blocked easily)
+          # ADDED --extractor-args (Forces YouTube to think this is an iOS iPhone app, bypassing the "Sign In" block)
           yt-dlp "ytsearch1:$QUERY" \
             --extract-audio \
             --audio-format mp3 \
@@ -37,18 +24,19 @@ jobs:
             --embed-metadata \
             --embed-thumbnail \
             --match-filter "duration <= 900" \
+            --force-ipv4 \
+            --extractor-args "youtube:player_client=ios,android" \
             --dump-json \
             --no-playlist \
             -o "track.%(ext)s" > info.json
           
-          # 3. Parse Metadata safely using jq
+          # Parse Metadata safely using jq
           VID_ID=$(jq -r '.id' info.json)
-          TITLE=$(jq -r '.title' info.json | sed 's/"/\\"/g') # Escape quotes
+          TITLE=$(jq -r '.title' info.json | sed 's/"/\\"/g')
           UPLOADER=$(jq -r '.uploader' info.json | sed 's/"/\\"/g')
           DURATION=$(jq -r '.duration_string' info.json)
           THUMB=$(jq -r '.thumbnail' info.json)
 
-          # Export variables to GitHub ENV for next steps
           echo "VID_ID=$VID_ID" >> $GITHUB_ENV
           echo "TITLE=$TITLE" >> $GITHUB_ENV
           echo "UPLOADER=$UPLOADER" >> $GITHUB_ENV
@@ -61,15 +49,12 @@ jobs:
           BOT_TOKEN="${{ secrets.TG_BOT_TOKEN }}"
           DUMP_CHAT_ID="${{ secrets.TG_DUMP_CHAT_ID }}"
           
-          # Uploading to Telegram. Because we embedded the thumbnail via yt-dlp, 
-          # Telegram will automatically read the ID3 tags and display the cover art!
           RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendAudio" \
             -F chat_id="$DUMP_CHAT_ID" \
             -F audio=@"track.mp3" \
             -F title="${{ env.TITLE }}" \
             -F performer="${{ env.UPLOADER }}")
             
-          # Extract the permanent file_id
           FILE_ID=$(echo $RESPONSE | jq -r '.result.audio.file_id')
           
           if [ "$FILE_ID" == "null" ] || [ -z "$FILE_ID" ]; then
@@ -99,11 +84,10 @@ jobs:
       - name: ❌ Failure Callback to TBL Bot
         if: failure()
         run: |
-          # If any step fails (e.g., video too long, yt-dlp fails), tell the bot to notify the user
           curl -s -X POST "${{ github.event.client_payload.callback_url }}" \
             -H "Content-Type: application/json" \
             -d "{
               \"status\": \"error\",
               \"chat_id\": \"${{ github.event.client_payload.chat_id }}\",
-              \"error_message\": \"Track exceeds 15 minutes or is age-restricted.\"
+              \"error_message\": \"YouTube Blocked the request or track exceeds 15 minutes.\"
             }"
