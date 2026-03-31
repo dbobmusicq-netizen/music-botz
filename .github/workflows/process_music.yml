@@ -15,17 +15,15 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 🚀 Install yt-dlp
-        run: python3 -m pip install -U yt-dlp
+        run: python3 -m pip install -U yt-dlp requests
 
       - name: 📥 Advanced Extraction (Triple Bypass)
         id: dl
         env:
           QUERY: "${{ github.event.client_payload.query }}"
         run: |
-          # Clean Query but keep it descriptive
           CLEAN_QUERY=$(echo "$QUERY" | sed 's/[^a-zA-Z0-9 ]/ /g' | xargs)
           
-          # Try YouTube (Android VR Client) then SoundCloud
           yt-dlp "ytsearch1:$CLEAN_QUERY" \
             --extract-audio --audio-format mp3 --audio-quality 0 \
             --force-ipv4 --extractor-args "youtube:player_client=android_vr,ios" \
@@ -37,16 +35,19 @@ jobs:
 
           if [ ! -f "track.mp3" ]; then echo "All sources failed" && exit 1; fi
 
-      - name: ☁️ Pro-Shield Telegram Upload (Python)
-        id: tg_upload
+      - name: ☁️ Pro-Shield Upload & Callback
+        id: tg_pro
         env:
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TG_DUMP_CHAT_ID }}
+          CALLBACK_URL: "${{ github.event.client_payload.callback_url }}"
+          USER_CHAT_ID: "${{ github.event.client_payload.chat_id }}"
+          MSG_ID: "${{ github.event.client_payload.msg_id }}"
         run: |
           python3 - <<EOF
           import os, requests, json, sys
 
-          # Get metadata from the info.json file
+          # 1. GET METADATA
           json_files = [f for f in os.listdir('.') if f.endswith('.info.json')]
           with open(json_files[0], 'r') as f:
               data = json.load(f)
@@ -57,44 +58,48 @@ jobs:
           vid_id = data.get('id', '0')
           thumb = data.get('thumbnail', '')
 
-          # Upload to Telegram
+          # 2. UPLOAD TO TELEGRAM DUMP CHANNEL
           files = {'audio': open('track.mp3', 'rb')}
-          payload = {
-              'chat_id': os.environ['CHAT_ID'],
-              'title': title,
-              'performer': performer
-          }
+          payload = {'chat_id': os.environ['CHAT_ID'], 'title': title, 'performer': performer}
+          url_tg = f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendAudio"
           
-          url = f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendAudio"
-          r = requests.post(url, data=payload, files=files)
-          res = r.json()
+          r_tg = requests.post(url_tg, data=payload, files=files)
+          res_tg = r_tg.json()
 
-          if not res.get('ok'):
-              print(f"Telegram Error: {res}")
+          if not res_tg.get('ok'):
+              print(f"Telegram Upload Failed: {res_tg}")
               sys.exit(1)
 
-          # Pass values to GitHub Env
-          with open(os.environ['GITHUB_ENV'], 'a') as f:
-              f.write(f"FILE_ID={res['result']['audio']['file_id']}\n")
-              f.write(f"TITLE={title}\n")
-              f.write(f"DUR={duration}\n")
-              f.write(f"THUMB={thumb}\n")
-              f.write(f"VID_ID={vid_id}\n")
-          EOF
+          file_id = res_tg['result']['audio']['file_id']
+          print(f"Successfully uploaded! File ID: {file_id}")
 
-      - name: 📡 Success Callback (Cloudflare Stealth)
-        if: success()
-        run: |
-          curl -s -X POST "${{ github.event.client_payload.callback_url }}" \
-            -H "Content-Type: application/json" \
-            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36" \
-            -d "{
-              \"status\": \"success\",
-              \"chat_id\": \"${{ github.event.client_payload.chat_id }}\",
-              \"mid\": \"${{ github.event.client_payload.msg_id }}\",
-              \"video_id\": \"${{ env.VID_ID }}\",
-              \"file_id\": \"${{ env.FILE_ID }}\",
-              \"title\": \"${{ env.TITLE }}\",
-              \"duration\": \"${{ env.DUR }}\",
-              \"thumbnail\": \"${{ env.THUMB }}\"
-            }"
+          # 3. DISGUISED CALLBACK TO TBL (BYPASSING CLOUDFLARE)
+          # We use realistic Browser Headers to avoid the "Just a moment" block
+          headers = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+              "Accept": "application/json, text/plain, */*",
+              "Content-Type": "application/json",
+              "Referer": "https://www.google.com/"
+          }
+
+          callback_data = {
+              "status": "success",
+              "chat_id": os.environ['USER_CHAT_ID'],
+              "mid": os.environ['MSG_ID'],
+              "video_id": vid_id,
+              "file_id": file_id,
+              "title": title,
+              "duration": duration,
+              "thumbnail": thumb
+          }
+
+          print("Sending callback to TBL...")
+          r_cb = requests.post(os.environ['CALLBACK_URL'], headers=headers, json=callback_data)
+          
+          if r_cb.status_code == 200:
+              print("✅ Callback Successful!")
+          else:
+              print(f"❌ Callback Failed with Status {r_cb.status_code}")
+              print(f"Cloudflare Response: {r_cb.text[:500]}")
+              sys.exit(1)
+          EOF
