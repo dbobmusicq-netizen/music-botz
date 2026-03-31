@@ -1,117 +1,17 @@
-name: TBL Premium Music Engine
-on:
-  repository_dispatch:
-    types: [process_music]
-
-jobs:
-  download-and-process:
-    runs-on: ubuntu-latest
-    timeout-minutes: 4
-
-    steps:
-      - name: 🛠 Setup High-Speed Environment
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg curl jq nodejs
-          sudo wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp
-          sudo chmod a+rx /usr/local/bin/yt-dlp
-
-      - name: 🍪 Load YouTube Cookies
-        run: |
-          # Loads the secret into a file that yt-dlp can read
-          cat << 'EOF' > cookies.txt
-          ${{ secrets.YT_COOKIES }}
-          EOF
-
-      - name: 📥 Download Engine (YT + Smart SC Fallback)
-        id: process_audio
-        run: |
-          QUERY="${{ github.event.client_payload.query }}"
-          echo "Processing: $QUERY"
-
-          # 1. Determine if it's a direct Link or a Search
-          if [[ "$QUERY" == *"http"* ]]; then
-             TARGET="$QUERY"
-          else
-             TARGET="ytsearch1:$QUERY"
-          fi
-
-          # 2. ATTEMPT 1: Download from YouTube using Cookies
-          echo "Attempting YouTube..."
-          yt-dlp "$TARGET" \
-            --cookies cookies.txt \
-            --extract-audio \
-            --audio-format mp3 \
-            --audio-quality 0 \
-            --embed-metadata \
-            --embed-thumbnail \
-            --match-filter "duration <= 900" \
-            --force-ipv4 \
-            --dump-json \
-            --no-playlist \
-            -o "track.%(ext)s" > info.json || echo "YouTube Failed."
-
-          # 3. ATTEMPT 2: Smart Fallback to SoundCloud
-          # If YouTube failed (IP ban/expired cookies), and the user just typed a song name (e.g. "dil"),
-          # we silently switch the search to SoundCloud to ensure 100% uptime!
-          if [ ! -f "track.mp3" ]; then
-              echo "⚠️ YT Failed. Triggering SoundCloud Fallback Engine..."
-              
-              if [[ "$QUERY" != *"http"* ]]; then
-                  yt-dlp "scsearch1:$QUERY" \
-                    --extract-audio \
-                    --audio-format mp3 \
-                    --audio-quality 0 \
-                    --embed-metadata \
-                    --embed-thumbnail \
-                    --dump-json \
-                    --no-playlist \
-                    -o "track.%(ext)s" > info.json
-              else
-                  echo "Direct YouTube link failed. Check your YT_COOKIES secret."
-                  exit 1
-              fi
-          fi
-
-          # 4. Safely Parse Metadata for TBL
-          VID_ID=$(jq -r '.id' info.json)
-          TITLE=$(jq -r '.title' info.json | sed 's/"/\\"/g')
-          UPLOADER=$(jq -r '.uploader // .artist' info.json | sed 's/"/\\"/g')
-          DURATION=$(jq -r '.duration_string // "Unknown"' info.json)
-          THUMB=$(jq -r '.thumbnail // "NA"' info.json)
-
-          echo "VID_ID=$VID_ID" >> $GITHUB_ENV
-          echo "TITLE=$TITLE" >> $GITHUB_ENV
-          echo "UPLOADER=$UPLOADER" >> $GITHUB_ENV
-          echo "DURATION=$DURATION" >> $GITHUB_ENV
-          echo "THUMB=$THUMB" >> $GITHUB_ENV
-
-      - name: ☁️ Upload to Telegram Zero-Cost CDN
-        id: upload_tg
-        run: |
-          BOT_TOKEN="${{ secrets.TG_BOT_TOKEN }}"
-          DUMP_CHAT_ID="${{ secrets.TG_DUMP_CHAT_ID }}"
-          
-          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendAudio" \
-            -F chat_id="$DUMP_CHAT_ID" \
-            -F audio=@"track.mp3" \
-            -F title="${{ env.TITLE }}" \
-            -F performer="${{ env.UPLOADER }}")
-            
-          FILE_ID=$(echo $RESPONSE | jq -r '.result.audio.file_id')
-          
-          if [ "$FILE_ID" == "null" ] || [ -z "$FILE_ID" ]; then
-            echo "Telegram Upload Failed: $RESPONSE"
-            exit 1
-          fi
-          
-          echo "FILE_ID=$FILE_ID" >> $GITHUB_ENV
-
-      - name: 📡 Success Callback to TBL Bot
+- name: 📡 Success Callback to TBL Bot (Bypassing Cloudflare)
         if: success()
         run: |
           curl -s -X POST "${{ github.event.client_payload.callback_url }}" \
             -H "Content-Type: application/json" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36" \
+            -H "Accept: application/json, text/plain, */*" \
+            -H "Accept-Language: en-US,en;q=0.9" \
+            -H "Sec-Ch-Ua: \"Google Chrome\";v=\"123\", \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"123\"" \
+            -H "Sec-Ch-Ua-Mobile: ?0" \
+            -H "Sec-Ch-Ua-Platform: \"Windows\"" \
+            -H "Sec-Fetch-Dest: empty" \
+            -H "Sec-Fetch-Mode: cors" \
+            -H "Sec-Fetch-Site: cross-site" \
             -d "{
               \"status\": \"success\",
               \"chat_id\": \"${{ github.event.client_payload.chat_id }}\",
@@ -124,11 +24,13 @@ jobs:
               \"thumbnail\": \"${{ env.THUMB }}\"
             }"
 
-      - name: ❌ Failure Callback to TBL Bot
+      - name: ❌ Failure Callback to TBL Bot (Bypassing Cloudflare)
         if: failure()
         run: |
           curl -s -X POST "${{ github.event.client_payload.callback_url }}" \
             -H "Content-Type: application/json" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36" \
+            -H "Accept: application/json" \
             -d "{
               \"status\": \"error\",
               \"chat_id\": \"${{ github.event.client_payload.chat_id }}\",
