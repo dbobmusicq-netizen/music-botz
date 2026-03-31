@@ -1,4 +1,4 @@
-name: TBL Turbo Music Engine
+name: TBL Ultra Music Engine
 on:
   repository_dispatch:
     types: [process_music]
@@ -9,35 +9,39 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: ⚡ Instant Setup
-        run: |
-          # FFmpeg, Curl, JQ, and Node.js are already pre-installed on GitHub Runners.
-          # We only install yt-dlp via pip (much faster than wget/apt).
-          python3 -m pip install -U yt-dlp
+      - name: 🚀 Turbo Setup
+        run: python3 -m pip install -U yt-dlp
 
-      - name: 📥 Smart Multi-Source Extraction
+      - name: 📥 Advanced Extraction (Android-VR Bypass)
         id: dl
         run: |
-          QUERY="${{ github.event.client_payload.query }}"
-          echo "Processing: $QUERY"
+          # 1. Clean the query (Removes symbols like & - | that break searches)
+          RAW_QUERY="${{ github.event.client_payload.query }}"
+          CLEAN_QUERY=$(echo "$RAW_QUERY" | sed 's/[^a-zA-Z0-9 ]/ /g' | xargs)
+          echo "Cleaned Query: $CLEAN_QUERY"
 
-          # Optimized yt-dlp command: 
-          # 1. Combined Clients (TV + iOS) in one go to save time.
-          # 2. --no-check-certificates and --no-warnings for speed.
-          # 3. Automatic fallback to SoundCloud integrated in one line.
+          # 2. Triple-Client Download Strategy
+          # - Try Android VR Client (Best Bypass)
+          # - Try iOS Client
+          # - Fallback to SoundCloud
           
-          yt-dlp "ytsearch1:$QUERY" \
+          yt-dlp "ytsearch1:$CLEAN_QUERY" \
             --extract-audio --audio-format mp3 --audio-quality 0 \
-            --force-ipv4 --extractor-args "youtube:player_client=tv,ios" \
+            --force-ipv4 --extractor-args "youtube:player_client=android_vr,ios" \
+            --user-agent "Mozilla/5.0 (Android 14; Mobile; rv:124.0) Gecko/124.0 Firefox/124.0" \
             --no-playlist --no-check-certificates --no-warnings \
             -o "track.mp3" --write-info-json || \
-          yt-dlp "scsearch1:$QUERY" \
+          yt-dlp "ytsearch1:$RAW_QUERY" \
             --extract-audio --audio-format mp3 --audio-quality 0 \
-            --no-playlist -o "track.mp3" --write-info-json
+            --force-ipv4 --extractor-args "youtube:player_client=tv,web" \
+            -o "track.mp3" --write-info-json || \
+          yt-dlp "scsearch1:$CLEAN_QUERY" \
+            --extract-audio --audio-format mp3 --audio-quality 0 \
+            -o "track.mp3" --write-info-json
 
           if [ ! -f "track.mp3" ]; then echo "All sources failed" && exit 1; fi
 
-          # Advanced Metadata Sanitization (Prevents JSON errors in TBL)
+          # 3. Clean Metadata Extraction (Prevents JSON crashes)
           JSON_FILE=$(ls *.info.json | head -n 1)
           TITLE=$(jq -r '.title' $JSON_FILE | tr -d '\"' | head -c 100)
           ARTIST=$(jq -r '.uploader // .artist' $JSON_FILE | tr -d '\"' | head -c 50)
@@ -48,9 +52,8 @@ jobs:
           echo "DUR=$(jq -r '.duration_string' $JSON_FILE)" >> $GITHUB_ENV
           echo "THUMB=$(jq -r '.thumbnail' $JSON_FILE)" >> $GITHUB_ENV
 
-      - name: ☁️ High-Speed Telegram Upload
+      - name: ☁️ Fast Telegram Upload
         run: |
-          # Use --http1.1 for faster, more stable Telegram API uploads
           RESPONSE=$(curl -s --http1.1 -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendAudio" \
             -F chat_id="${{ secrets.TG_DUMP_CHAT_ID }}" \
             -F audio=@"track.mp3" \
@@ -58,17 +61,15 @@ jobs:
             -F performer="${{ env.ARTIST }}")
           
           FILE_ID=$(echo $RESPONSE | jq -r '.result.audio.file_id')
-          if [ "$FILE_ID" == "null" ]; then exit 1; fi
+          if [ "$FILE_ID" == "null" ] || [ -z "$FILE_ID" ]; then exit 1; fi
           echo "FILE_ID=$FILE_ID" >> $GITHUB_ENV
 
-      - name: 📡 Pro-Callback (Cloudflare Stealth)
+      - name: 📡 Success Callback (Cloudflare Stealth)
         if: success()
         run: |
-          # Enhanced headers to guarantee 100% bypass of TeleBotHost firewalls
           curl -s -X POST "${{ github.event.client_payload.callback_url }}" \
             -H "Content-Type: application/json" \
-            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" \
-            -H "Referer: https://www.google.com/" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36" \
             -d "{
               \"status\": \"success\",
               \"chat_id\": \"${{ github.event.client_payload.chat_id }}\",
