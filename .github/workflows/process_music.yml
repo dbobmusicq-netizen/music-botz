@@ -1,98 +1,75 @@
-name: TBL Ultra Music Engine (Unblockable v6.0)
+name: TBL Music Engine (Stable Edition)
 on:
   repository_dispatch:
     types: [process_music]
 
 jobs:
-  turbo-process:
+  download-and-process:
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: ⚡ High-Speed Execution
-        env:
-          BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          U_ID: "${{ github.event.client_payload.chat_id }}"
-          M_ID: "${{ github.event.client_payload.msg_id }}"
-          T_ID: "${{ github.event.client_payload.track_id }}"
-          QUERY: "${{ github.event.client_payload.query }}"
-          WEBAPP_URL: "https://prod-api.telebothost.com/ownlang/webapp/15614049/save_cache"
+      - name: 🚀 Turbo Setup
         run: |
+          # Fast binary download
           curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           chmod a+rx /usr/local/bin/yt-dlp
 
+      - name: 📥 Stable Extraction
+        id: dl
+        env:
+          QUERY: "${{ github.event.client_payload.query }}"
+        run: |
+          # Clean Query
+          CLEAN_QUERY=$(echo "$QUERY" | sed 's/[^a-zA-Z0-9 ]/ /g' | xargs)
+          
+          # Try YouTube (TV Client) then SoundCloud
+          yt-dlp "ytsearch1:$CLEAN_QUERY" \
+            --extract-audio --audio-format mp3 --audio-quality 0 \
+            --force-ipv4 --extractor-args "youtube:player_client=tv,ios" \
+            --no-playlist --no-check-certificates --quiet \
+            -o "track.mp3" --write-info-json || \
+          yt-dlp "scsearch1:$QUERY" \
+            --extract-audio --audio-format mp3 --audio-quality 0 \
+            --no-playlist -o "track.mp3" --write-info-json
+
+          if [ ! -f "track.mp3" ]; then exit 1; fi
+
+      - name: ☁️ Direct Delivery & Cache Update
+        env:
+          BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          DUMP_ID: ${{ secrets.TG_DUMP_CHAT_ID }}
+          U_ID: "${{ github.event.client_payload.chat_id }}"
+          M_ID: "${{ github.event.client_payload.msg_id }}"
+          T_ID: "${{ github.event.client_payload.track_id }}"
+          # 👇 REPLACE 15614049 WITH YOUR BOT ID
+          WEB_URL: "https://prod-api.telebothost.com/ownlang/webapp/15614049/save_cache"
+        run: |
           python3 - <<EOF
-          import os, requests, subprocess, json, sys
+          import os, requests, json, sys
 
-          def run():
-              q = os.environ['QUERY']
-              # We clean the query only for YouTube search to be more specific
-              clean_q = "".join(e for e in q if e.isalnum() or e.isspace())
+          # 1. Get Metadata
+          info = [f for f in os.listdir('.') if f.endswith('.info.json')][0]
+          with open(info, 'r') as f:
+              meta = json.load(f)
+          title = meta.get('title', 'Audio')[:100]
+
+          bot_token = os.environ['BOT_TOKEN']
+          url = f"https://api.telegram.org/bot{bot_token}/sendAudio"
+
+          # 2. Upload to Dump Channel to get File ID
+          files = {'audio': open('track.mp3', 'rb')}
+          r_dump = requests.post(url, data={'chat_id': os.environ['DUMP_ID'], 'title': title}, files=files)
+          
+          if r_dump.json().get('ok'):
+              fid = r_dump.json()['result']['audio']['file_id']
               
-              # THE ULTIMATE BYPASS LIST
-              # We try 6 different clients and 2 platforms (YT + SC)
-              sources = [
-                  # 1. YouTube Android VR Client (Currently the strongest bypass)
-                  ['yt-dlp', f"ytsearch1:{q}", '--extract-audio', '--audio-format', 'mp3', '--force-ipv4', '--extractor-args', 'youtube:player_client=android_vr,ios', '-o', 't.mp3', '--no-playlist', '--quiet', '--write-info-json'],
-                  # 2. SoundCloud Primary (100% working on GitHub IPs)
-                  ['yt-dlp', f"scsearch1:{q}", '--extract-audio', '--audio-format', 'mp3', '-o', 't.mp3', '--quiet', '--write-info-json'],
-                  # 3. YouTube TV Client Fallback
-                  ['yt-dlp', f"ytsearch1:{clean_q}", '--extract-audio', '--audio-format', 'mp3', '--force-ipv4', '--extractor-args', 'youtube:player_client=tv,web', '-o', 't.mp3', '--no-playlist', '--quiet', '--write-info-json'],
-                  # 4. YouTube Mobile Web Fallback
-                  ['yt-dlp', f"ytsearch1:{clean_q}", '--extract-audio', '--audio-format', 'mp3', '--force-ipv4', '--extractor-args', 'youtube:player_client=mweb,android', '-o', 't.mp3', '--no-playlist', '--quiet', '--write-info-json']
-              ]
+              # 3. Direct Delivery to User (Bypass Cloudflare)
+              requests.post(url, data={'chat_id': os.environ['U_ID'], 'audio': fid, 'caption': f"✅ *Success!*\n🎵 {title}", 'parse_mode': 'Markdown'})
 
-              success = False
-              for cmd in sources:
-                  print(f"Trying source: {cmd[1]}")
-                  try:
-                      # Increased timeout to allow for slow YouTube challenges
-                      subprocess.run(cmd, check=True, timeout=180)
-                      if os.path.exists('t.mp3'):
-                          success = True
-                          break
-                  except:
-                      continue
-
-              if not success:
-                  requests.post(f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendMessage", 
-                               data={'chat_id': os.environ['U_ID'], 'text': "❌ *System Alert:* High-level protection detected. Trying emergency bypass...", 'parse_mode': 'Markdown'})
-                  # FINAL EMERGENCY ATTEMPT: Raw Search without formats
-                  try:
-                      subprocess.run(['yt-dlp', f"ytsearch1:{q}", '-x', '--audio-format', 'mp3', '--no-check-certificates', '-o', 't.mp3', '--quiet', '--write-info-json'], check=True)
-                      if os.path.exists('t.mp3'): success = True
-                  except: pass
-
-              if not success:
-                  requests.post(f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendMessage", 
-                               data={'chat_id': os.environ['U_ID'], 'text': "❌ *Failed:* YouTube is strictly blocking datacenter IPs. Please try again in a few minutes.", 'parse_mode': 'Markdown'})
-                  return
-
-              # --- SUCCESS: DELIVER AND CACHE ---
-              info_files = [f for f in os.listdir('.') if f.endswith('.info.json')]
-              with open(info_files[0], 'r') as f:
-                  meta = json.load(f)
-              title = meta.get('title', 'Audio')[:100]
-
-              url = f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendAudio"
-              with open('t.mp3', 'rb') as audio_file:
-                  r = requests.post(url, data={
-                      'chat_id': os.environ['U_ID'], 
-                      'title': title, 
-                      'caption': f"✅ *Successfully Bypassed!*\n🎵 {title}", 
-                      'parse_mode': 'Markdown'
-                  }, files={'audio': audio_file})
-
-              # Cache Update (Ensures T_ID exists)
-              if r.json().get('ok'):
-                  fid = r.json()['result']['audio']['file_id']
-                  tid = os.environ.get('T_ID')
-                  if tid and tid != "undefined":
-                      requests.get(os.environ['WEBAPP_URL'], params={'id': tid, 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
-
-              # Cleanup
-              requests.post(f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/deleteMessage", 
-                            data={'chat_id': os.environ['U_ID'], 'message_id': os.environ['M_ID']})
-
-          run()
+              # 4. Update Bot Cache (GET bypasses 403)
+              requests.get(os.environ['WEB_URL'], params={'id': os.environ['T_ID'], 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
+          
+          # 5. Cleanup
+          requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", data={'chat_id': os.environ['U_ID'], 'message_id': os.environ['M_ID']})
           EOF
