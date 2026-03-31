@@ -1,4 +1,4 @@
-name: TBL Ultra Music Engine (Direct Delivery)
+name: TBL Ultra Music Engine (Direct Delivery + Caching)
 on:
   repository_dispatch:
     types: [process_music]
@@ -35,16 +35,26 @@ jobs:
 
           if [ ! -f "track.mp3" ]; then echo "All sources failed" && exit 1; fi
 
-      - name: ☁️ Direct Delivery to User (Bypassing Cloudflare)
+      - name: ☁️ Direct Delivery & Smart Cache Update
         id: tg_pro
         env:
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           DUMP_CHAT_ID: ${{ secrets.TG_DUMP_CHAT_ID }}
           USER_CHAT_ID: "${{ github.event.client_payload.chat_id }}"
           MSG_ID: "${{ github.event.client_payload.msg_id }}"
+          TRACK_ID: "${{ github.event.client_payload.track_id }}"
+          # Replace 'YOUR_BOT_ID' with your numeric bot ID from TBL URL
+          WEBAPP_URL: "https://prod-api.telebothost.com/ownlang/webapp/YOUR_BOT_ID/save_cache"
         run: |
           python3 - <<EOF
           import os, requests, json, sys
+
+          bot_token = os.environ['BOT_TOKEN']
+          user_id = os.environ['USER_CHAT_ID']
+          dump_id = os.environ['DUMP_CHAT_ID']
+          msg_id = os.environ['MSG_ID']
+          track_id = os.environ['TRACK_ID']
+          webapp_base = os.environ['WEBAPP_URL']
 
           # 1. GET METADATA
           json_files = [f for f in os.listdir('.') if f.endswith('.info.json')]
@@ -52,13 +62,7 @@ jobs:
               data = json.load(f)
 
           title = data.get('title', 'Unknown Title')[:100]
-          performer = (data.get('uploader') or data.get('artist') or 'Music Bot')[:50]
           duration = data.get('duration_string', '0:00')
-
-          bot_token = os.environ['BOT_TOKEN']
-          user_id = os.environ['USER_CHAT_ID']
-          dump_id = os.environ['DUMP_CHAT_ID']
-          msg_id = os.environ['MSG_ID']
 
           # 2. UPLOAD DIRECTLY TO THE USER
           print(f"Delivering song to User: {user_id}...")
@@ -71,20 +75,23 @@ jobs:
               'parse_mode': 'Markdown'
           }
           
-          url_send = f"https://api.telegram.org/bot{bot_token}/sendAudio"
-          r_send = requests.post(url_send, data=payload, files=files)
-          
-          if r_send.json().get('ok'):
-              print("✅ Song delivered to user successfully!")
-              # ALSO upload to dump channel for your records
-              requests.post(url_send, data={'chat_id': dump_id, 'title': title}, files={'audio': open('track.mp3', 'rb')})
-          else:
-              print(f"❌ Failed to send to user: {r_send.text}")
-              sys.exit(1)
+          url_tg = f"https://api.telegram.org/bot{bot_token}/sendAudio"
+          requests.post(url_tg, data=payload, files=files)
 
-          # 3. DELETE THE "PROCESSING" MESSAGE IN THE BOT
-          print(f"Cleaning up loading message {msg_id}...")
-          url_del = f"https://api.telegram.org/bot{bot_token}/deleteMessage"
-          requests.post(url_del, data={'chat_id': user_id, 'message_id': msg_id})
+          # 3. UPLOAD TO STORAGE CHANNEL TO GET PERMANENT FILE_ID
+          print("Saving to Storage Channel for caching...")
+          files_dump = {'audio': open('track.mp3', 'rb')}
+          r_dump = requests.post(url_tg, data={'chat_id': dump_id, 'title': title}, files=files_dump)
           
+          if r_dump.json().get('ok'):
+              perm_file_id = r_dump.json()['result']['audio']['file_id']
+              
+              # 4. UPDATE BOT CACHE (Bypassing Cloudflare via Webapp GET)
+              print(f"Updating Bot Cache for Track ID: {track_id}")
+              cache_params = {'id': track_id, 'file': perm_file_id}
+              headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0"}
+              requests.get(webapp_base, params=cache_params, headers=headers)
+          
+          # 5. DELETE THE LOADING MESSAGE
+          requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", data={'chat_id': user_id, 'message_id': msg_id})
           EOF
