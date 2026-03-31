@@ -23,7 +23,6 @@ jobs:
           QUERY: "${{ github.event.client_payload.query }}"
         run: |
           CLEAN_QUERY=$(echo "$QUERY" | sed 's/[^a-zA-Z0-9 ]/ /g' | xargs)
-          
           yt-dlp "ytsearch1:$CLEAN_QUERY" \
             --extract-audio --audio-format mp3 --audio-quality 0 \
             --force-ipv4 --extractor-args "youtube:player_client=android_vr,ios" \
@@ -33,9 +32,9 @@ jobs:
             --extract-audio --audio-format mp3 --audio-quality 0 \
             --no-playlist -o "track.mp3" --write-info-json
 
-          if [ ! -f "track.mp3" ]; then echo "All sources failed" && exit 1; fi
+          if [ ! -f "track.mp3" ]; then exit 1; fi
 
-      - name: ☁️ Direct Delivery & Smart Cache Update
+      - name: ☁️ Storage-First Delivery & Caching
         id: tg_pro
         env:
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
@@ -43,7 +42,7 @@ jobs:
           USER_CHAT_ID: "${{ github.event.client_payload.chat_id }}"
           MSG_ID: "${{ github.event.client_payload.msg_id }}"
           TRACK_ID: "${{ github.event.client_payload.track_id }}"
-          # Replace 'YOUR_BOT_ID' with your numeric bot ID from TBL URL
+          # 👇 REPLACE YOUR_BOT_ID WITH YOUR ACTUAL NUMERIC BOT ID
           WEBAPP_URL: "https://prod-api.telebothost.com/ownlang/webapp/YOUR_BOT_ID/save_cache"
         run: |
           python3 - <<EOF
@@ -60,38 +59,29 @@ jobs:
           json_files = [f for f in os.listdir('.') if f.endswith('.info.json')]
           with open(json_files[0], 'r') as f:
               data = json.load(f)
+          title = data.get('title', 'Unknown')[:100]
 
-          title = data.get('title', 'Unknown Title')[:100]
-          duration = data.get('duration_string', '0:00')
-
-          # 2. UPLOAD DIRECTLY TO THE USER
-          print(f"Delivering song to User: {user_id}...")
+          # 2. UPLOAD TO STORAGE CHANNEL FIRST (Crucial for Caching)
           files = {'audio': open('track.mp3', 'rb')}
-          payload = {
-              'chat_id': user_id, 
-              'title': title, 
-              'performer': 'Ultra Music Engine',
-              'caption': f"✅ *Track Found!*\n🎵 *{title}*\n⏱ {duration}",
-              'parse_mode': 'Markdown'
-          }
-          
           url_tg = f"https://api.telegram.org/bot{bot_token}/sendAudio"
-          requests.post(url_tg, data=payload, files=files)
-
-          # 3. UPLOAD TO STORAGE CHANNEL TO GET PERMANENT FILE_ID
-          print("Saving to Storage Channel for caching...")
-          files_dump = {'audio': open('track.mp3', 'rb')}
-          r_dump = requests.post(url_tg, data={'chat_id': dump_id, 'title': title}, files=files_dump)
+          r_dump = requests.post(url_tg, data={'chat_id': dump_id, 'title': title}, files=files)
           
           if r_dump.json().get('ok'):
               perm_file_id = r_dump.json()['result']['audio']['file_id']
               
-              # 4. UPDATE BOT CACHE (Bypassing Cloudflare via Webapp GET)
-              print(f"Updating Bot Cache for Track ID: {track_id}")
-              cache_params = {'id': track_id, 'file': perm_file_id}
-              headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0"}
-              requests.get(webapp_base, params=cache_params, headers=headers)
+              # 3. FAST-FORWARD TO USER (Uses Telegram's servers, not GitHub's bandwidth)
+              requests.post(url_tg, data={
+                  'chat_id': user_id, 
+                  'audio': perm_file_id, 
+                  'caption': f"✅ *Success!*\n🎵 {title}", 
+                  'parse_mode': 'Markdown'
+              })
+
+              # 4. UPDATE BOT DATABASE (GET bypasses Cloudflare)
+              requests.get(webapp_base, params={'id': track_id, 'file': perm_file_id}, 
+                           headers={"User-Agent": "Mozilla/5.0"})
           
-          # 5. DELETE THE LOADING MESSAGE
-          requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", data={'chat_id': user_id, 'message_id': msg_id})
+          # 5. DELETE LOADING MESSAGE
+          requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", 
+                        data={'chat_id': user_id, 'message_id': msg_id})
           EOF
