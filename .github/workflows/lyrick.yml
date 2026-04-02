@@ -1,4 +1,4 @@
-name: TBL Lyrics Engine
+name: TBL Lyrics Engine (Extreme Scraper)
 on:
   repository_dispatch:
     types: [get_lyrics]
@@ -7,7 +7,10 @@ jobs:
   fetch-lyrics:
     runs-on: ubuntu-latest
     steps:
-      - name: 📝 Fetch & Delivery
+      - name: 🛠 Install Scrapers
+        run: python3 -m pip install beautifulsoup4 requests lxml
+
+      - name: 📝 Multi-Source Scraping
         env:
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           U_ID: "${{ github.event.client_payload.chat_id }}"
@@ -15,43 +18,85 @@ jobs:
           TITLE: "${{ github.event.client_payload.title }}"
         run: |
           python3 - <<EOF
-          import os, requests, json, sys
+          import os, requests, re, sys
+          from bs4 import BeautifulSoup
 
           def get_lyrics():
               artist = os.environ['ARTIST']
               title = os.environ['TITLE']
               user_id = os.environ['U_ID']
               bot_token = os.environ['BOT_TOKEN']
-
-              # 1. Hit LRCLIB (The most stable free lyrics API)
-              url = f"https://lrclib.net/api/get?artist={requests.utils.quote(artist)}&track={requests.utils.quote(title)}"
+              query = f"{artist} {title}"
               
+              lyrics = None
+              source_used = ""
+
+              # Common Headers to mimic a real browser
+              headers = {
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+              }
+
+              # --- METHOD 1: GENIUS SCRAPER ---
               try:
-                  r = requests.get(url, timeout=10)
-                  data = r.json()
-                  lyrics = data.get('plainLyrics')
+                  print(f"Trying Genius for {query}...")
+                  search_url = f"https://genius.com/api/search/multi?q={query}"
+                  search_res = requests.get(search_url, headers=headers).json()
                   
-                  if not lyrics:
-                      # Fallback to Lyrics.ovh if LRCLIB has nothing
-                      r_ovh = requests.get(f"https://api.lyrics.ovh/v1/{artist}/{title}").json()
-                      lyrics = r_ovh.get('lyrics')
-
-                  if lyrics:
-                      # 2. Format the message
-                      header = f"📝 *Lyrics:* {title}\n👤 *Artist:* {artist}\n\n"
-                      full_text = header + lyrics
-                      
-                      # Telegram Limit is 4096. We cut at 4000 to be safe.
-                      final_text = (full_text[:4000] + '...') if len(full_text) > 4000 else full_text
-
-                      # 3. Send directly to user
-                      send_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-                      requests.post(send_url, data={'chat_id': user_id, 'text': final_text, 'parse_mode': 'Markdown'})
-                  else:
-                      requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", 
-                                   data={'chat_id': user_id, 'text': f"❌ Sorry, lyrics for *{title}* not found.", 'parse_mode': 'Markdown'})
+                  # Find the first song in the search results
+                  song_path = None
+                  for section in search_res['response']['sections']:
+                      if section['type'] == 'song' and section['hits']:
+                          song_path = section['hits'][0]['result']['url']
+                          break
+                  
+                  if song_path:
+                      page = requests.get(song_path, headers=headers)
+                      soup = BeautifulSoup(page.text, "lxml")
+                      # Genius stores lyrics in specific containers
+                      containers = soup.select('div[data-lyrics-container="true"]')
+                      if containers:
+                          lyrics = "\n".join([c.get_text(separator="\n") for c in containers])
+                          source_used = "Genius"
               except Exception as e:
-                  print(f"Error: {e}")
+                  print(f"Genius failed: {e}")
+
+              # --- METHOD 2: AZLYRICS (FALLBACK) ---
+              if not lyrics:
+                  try:
+                      print("Trying AZLyrics fallback...")
+                      # AZLyrics URL format: azlyrics.com/lyrics/artist/title.html (lowercase, no spaces)
+                      s_artist = re.sub(r'[^a-z0-9]', '', artist.lower())
+                      s_title = re.sub(r'[^a-z0-9]', '', title.lower())
+                      az_url = f"https://www.azlyrics.com/lyrics/{s_artist}/{s_title}.html"
+                      
+                      page = requests.get(az_url, headers=headers, timeout=10)
+                      soup = BeautifulSoup(page.text, "lxml")
+                      # AZLyrics lyrics are in a div with no class, usually after a comment
+                      divs = soup.find_all('div', class_=None)
+                      for d in divs:
+                          if len(d.text) > 100:
+                              lyrics = d.text.strip()
+                              source_used = "AZLyrics"
+                              break
+                  except: pass
+
+              # --- FINAL DELIVERY ---
+              send_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+              if lyrics:
+                  # Clean up common scraping artifacts
+                  lyrics = re.sub(r'\[.*?\]', '', lyrics) # Remove [Chorus], [Verse] etc
+                  
+                  header = f"📝 *Lyrics:* {title}\n👤 *Artist:* {artist}\n🌐 *Source:* {source_used}\n\n"
+                  full_text = header + lyrics
+                  
+                  # Split into parts if too long (Telegram limit 4096)
+                  if len(full_text) > 4000:
+                      for i in range(0, len(full_text), 4000):
+                          requests.post(send_url, data={'chat_id': user_id, 'text': full_text[i:i+4000], 'parse_mode': 'Markdown'})
+                  else:
+                      requests.post(send_url, data={'chat_id': user_id, 'text': full_text, 'parse_mode': 'Markdown'})
+              else:
+                  requests.post(send_url, data={'chat_id': user_id, 'text': f"❌ Sorry, lyrics for *{title}* could not be found on any source.", 'parse_mode': 'Markdown'})
 
           get_lyrics()
           EOF
