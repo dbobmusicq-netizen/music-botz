@@ -1,0 +1,57 @@
+name: TBL Lyrics Engine
+on:
+  repository_dispatch:
+    types: [get_lyrics]
+
+jobs:
+  fetch-lyrics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📝 Fetch & Delivery
+        env:
+          BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          U_ID: "${{ github.event.client_payload.chat_id }}"
+          ARTIST: "${{ github.event.client_payload.artist }}"
+          TITLE: "${{ github.event.client_payload.title }}"
+        run: |
+          python3 - <<EOF
+          import os, requests, json, sys
+
+          def get_lyrics():
+              artist = os.environ['ARTIST']
+              title = os.environ['TITLE']
+              user_id = os.environ['U_ID']
+              bot_token = os.environ['BOT_TOKEN']
+
+              # 1. Hit LRCLIB (The most stable free lyrics API)
+              url = f"https://lrclib.net/api/get?artist={requests.utils.quote(artist)}&track={requests.utils.quote(title)}"
+              
+              try:
+                  r = requests.get(url, timeout=10)
+                  data = r.json()
+                  lyrics = data.get('plainLyrics')
+                  
+                  if not lyrics:
+                      # Fallback to Lyrics.ovh if LRCLIB has nothing
+                      r_ovh = requests.get(f"https://api.lyrics.ovh/v1/{artist}/{title}").json()
+                      lyrics = r_ovh.get('lyrics')
+
+                  if lyrics:
+                      # 2. Format the message
+                      header = f"📝 *Lyrics:* {title}\n👤 *Artist:* {artist}\n\n"
+                      full_text = header + lyrics
+                      
+                      # Telegram Limit is 4096. We cut at 4000 to be safe.
+                      final_text = (full_text[:4000] + '...') if len(full_text) > 4000 else full_text
+
+                      # 3. Send directly to user
+                      send_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                      requests.post(send_url, data={'chat_id': user_id, 'text': final_text, 'parse_mode': 'Markdown'})
+                  else:
+                      requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", 
+                                   data={'chat_id': user_id, 'text': f"❌ Sorry, lyrics for *{title}* not found.", 'parse_mode': 'Markdown'})
+              except Exception as e:
+                  print(f"Error: {e}")
+
+          get_lyrics()
+          EOF
