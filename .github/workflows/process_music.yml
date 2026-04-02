@@ -1,75 +1,116 @@
-name: TBL Music Engine (Stable Edition)
+name: TBL Hybrid Turbo Engine (v8.0)
 on:
   repository_dispatch:
     types: [process_music]
 
 jobs:
-  download-and-process:
+  hybrid-delivery:
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
       - name: 🚀 Turbo Setup
         run: |
-          # Fast binary download
+          # Grab latest yt-dlp binary (Fastest method)
           curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           chmod a+rx /usr/local/bin/yt-dlp
+          python3 -m pip install -U requests
 
-      - name: 📥 Stable Extraction
-        id: dl
-        env:
-          QUERY: "${{ github.event.client_payload.query }}"
-        run: |
-          # Clean Query
-          CLEAN_QUERY=$(echo "$QUERY" | sed 's/[^a-zA-Z0-9 ]/ /g' | xargs)
-          
-          # Try YouTube (TV Client) then SoundCloud
-          yt-dlp "ytsearch1:$CLEAN_QUERY" \
-            --extract-audio --audio-format mp3 --audio-quality 0 \
-            --force-ipv4 --extractor-args "youtube:player_client=tv,ios" \
-            --no-playlist --no-check-certificates --quiet \
-            -o "track.mp3" --write-info-json || \
-          yt-dlp "scsearch1:$QUERY" \
-            --extract-audio --audio-format mp3 --audio-quality 0 \
-            --no-playlist -o "track.mp3" --write-info-json
-
-          if [ ! -f "track.mp3" ]; then exit 1; fi
-
-      - name: ☁️ Direct Delivery & Cache Update
+      - name: 📥 Waterfall Extraction & Direct Delivery
         env:
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           DUMP_ID: ${{ secrets.TG_DUMP_CHAT_ID }}
           U_ID: "${{ github.event.client_payload.chat_id }}"
           M_ID: "${{ github.event.client_payload.msg_id }}"
           T_ID: "${{ github.event.client_payload.track_id }}"
-          # 👇 REPLACE 15614049 WITH YOUR BOT ID
+          QUERY: "${{ github.event.client_payload.query }}"
+          # 👇 REPLACE 15614049 WITH YOUR NUMERIC BOT ID
           WEB_URL: "https://prod-api.telebothost.com/ownlang/webapp/15614049/save_cache"
         run: |
           python3 - <<EOF
-          import os, requests, json, sys
+          import os, requests, subprocess, json, sys
 
-          # 1. Get Metadata
-          info = [f for f in os.listdir('.') if f.endswith('.info.json')][0]
-          with open(info, 'r') as f:
-              meta = json.load(f)
-          title = meta.get('title', 'Audio')[:100]
-
-          bot_token = os.environ['BOT_TOKEN']
-          url = f"https://api.telegram.org/bot{bot_token}/sendAudio"
-
-          # 2. Upload to Dump Channel to get File ID
-          files = {'audio': open('track.mp3', 'rb')}
-          r_dump = requests.post(url, data={'chat_id': os.environ['DUMP_ID'], 'title': title}, files=files)
-          
-          if r_dump.json().get('ok'):
-              fid = r_dump.json()['result']['audio']['file_id']
+          def turbo_engine():
+              query = os.environ['QUERY']
+              bot_token = os.environ['BOT_TOKEN']
+              user_id = os.environ['U_ID']
+              dump_id = os.environ['DUMP_ID']
               
-              # 3. Direct Delivery to User (Bypass Cloudflare)
-              requests.post(url, data={'chat_id': os.environ['U_ID'], 'audio': fid, 'caption': f"✅ *Success!*\n🎵 {title}", 'parse_mode': 'Markdown'})
+              stream_url = None
+              title = "Audio"
 
-              # 4. Update Bot Cache (GET bypasses 403)
-              requests.get(os.environ['WEB_URL'], params={'id': os.environ['T_ID'], 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
-          
-          # 5. Cleanup
-          requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", data={'chat_id': os.environ['U_ID'], 'message_id': os.environ['M_ID']})
+              # --- LAYER 1: JIOSAAVN (Lightning Fast / Direct MP4 Link) ---
+              try:
+                  print(f"Searching JioSaavn: {query}")
+                  # Use a high-reputation public Saavn API
+                  api = f"https://saavn.me/search/songs?query={query}&limit=1"
+                  r = requests.get(api, timeout=4).json()
+                  if r['status'] == 'SUCCESS' and r['data']['results']:
+                      res = r['data']['results'][0]
+                      title = f"{res['name']} - {res['primaryArtists']}"
+                      # Get the 320kbps direct link
+                      stream_url = res['downloadUrl'][4]['link']
+                      print("✅ Found on JioSaavn!")
+              except: pass
+
+              # --- LAYER 2: YOUTUBE MUSIC (Fallback / Android-VR Bypass) ---
+              if not stream_url:
+                  print("JioSaavn missed. Trying YouTube Music...")
+                  try:
+                      # Using Android-VR client as it bypasses 'Sign-in' blocks on GH IPs
+                      cmd = ['yt-dlp', f"ytsearch1:{query}", '--get-url', '--get-title', '--force-ipv4', '--extractor-args', 'youtube:player_client=android_vr,ios']
+                      process = subprocess.run(cmd, capture_output=True, text=True)
+                      out = process.stdout.split('\n')
+                      if len(out) >= 2:
+                          title = out[0]
+                          stream_url = out[1]
+                          print("✅ Found on YouTube Music!")
+                  except: pass
+
+              # --- LAYER 3: SOUNDCLOUD (Final Bulletproof Fallback) ---
+              if not stream_url:
+                  print("YTM missed. Trying SoundCloud...")
+                  try:
+                      cmd = ['yt-dlp', f"scsearch1:{query}", '--get-url', '--get-title']
+                      process = subprocess.run(cmd, capture_output=True, text=True)
+                      out = process.stdout.split('\n')
+                      if len(out) >= 2:
+                          title = out[0]
+                          stream_url = out[1]
+                          print("✅ Found on SoundCloud!")
+                  except: pass
+
+              if not stream_url:
+                  requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", data={'chat_id': user_id, 'text': "❌ Track not found on any server."})
+                  sys.exit(1)
+
+              # --- TURBO PROCESSING (Direct-to-MP3 Stream) ---
+              # We don't download the source file. We stream the URL directly into an MP3 file.
+              output_file = "track.mp3"
+              print(f"Streaming and Converting: {title}")
+              
+              # -i (input URL), -c:a (codec), -q:a (quality level 2 = ~192-256kbps VBR)
+              subprocess.run(['ffmpeg', '-y', '-i', stream_url, '-vn', '-c:a', 'libmp3lame', '-q:a', '2', output_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+              # --- DELIVERY & SMART CACHE SYNC ---
+              tg_url = f"https://api.telegram.org/bot{bot_token}/sendAudio"
+              with open(output_file, 'rb') as f:
+                  # 1. Upload to Dump Channel to generate permanent file_id
+                  r_dump = requests.post(tg_url, data={'chat_id': dump_id, 'title': title}, files={'audio': f})
+              
+              if r_dump.json().get('ok'):
+                  fid = r_dump.json()['result']['audio']['file_id']
+                  
+                  # 2. Direct Delivery to user (Bypass TBL Cloudflare)
+                  requests.post(tg_url, data={'chat_id': user_id, 'audio': fid, 'caption': f"✅ *Successfully Found!*\n🎵 {title}\n⚡ _High-Speed Hybrid Engine_", 'parse_mode': 'Markdown'})
+                  
+                  # 3. Sync to Bot Database (GET method is Cloudflare-Proof)
+                  tid = os.environ.get('T_ID')
+                  if tid and tid != "undefined":
+                      requests.get(os.environ['WEB_URL'], params={'id': tid, 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
+
+              # 4. Cleanup UI
+              requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", data={'chat_id': user_id, 'message_id': os.environ['M_ID']})
+
+          turbo_engine()
           EOF
