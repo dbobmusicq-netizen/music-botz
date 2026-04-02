@@ -1,25 +1,25 @@
-name: TBL Apex Music Engine (v12.0 - Ultra Stability)
+name: TBL Zenith Music Engine (v13.0 - Maximum Stability)
 on:
   repository_dispatch:
     types: [process_music]
 
 jobs:
-  apex-delivery:
+  zenith-delivery:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
-      - name: 🛠 Setup FFmpeg
+      - name: 🛠 Setup Pro Environment
         uses: federicocarboni/setup-ffmpeg@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 🚀 Install Advanced Scrapers
+      - name: 🚀 Install Advanced Dependencies
         run: |
           python3 -m pip install -U yt-dlp requests
           echo "/usr/bin" >> $GITHUB_PATH
 
-      - name: 📥 Apex Waterfall Extraction
+      - name: 📥 Zenith Waterfall Extraction
         env:
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           DUMP_ID: ${{ secrets.TG_DUMP_CHAT_ID }}
@@ -30,9 +30,9 @@ jobs:
           WEB_URL: "https://prod-api.telebothost.com/ownlang/webapp/15614049/save_cache"
         run: |
           python3 - <<EOF
-          import os, requests, subprocess, json, sys, time, re
+          import os, requests, subprocess, json, sys, time
 
-          def apex_engine():
+          def zenith_engine():
               query = os.environ['QUERY']
               bot_token = os.environ['BOT_TOKEN']
               user_id = os.environ['U_ID']
@@ -41,79 +41,79 @@ jobs:
               
               success = False
               final_title = query
-              audio_url = None
+              
+              # Unified Session for all requests to maintain cookies/headers
+              session = requests.Session()
+              session.headers.update({
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                  "Accept-Language": "en-US,en;q=0.9"
+              })
 
-              # --- LAYER 1: JIOSAAVN OFFICIAL INTERNAL API (THE UNBLOCKABLE) ---
+              # --- LAYER 1: JIOSAAVN (STABLE INTERNAL API) ---
               try:
-                  print(f"Layer 1: Hitting JioSaavn Internal API for {query}")
-                  # Official JioSaavn Mobile App Search Endpoint
-                  search_api = f"https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query={query}"
+                  print(f"Layer 1: JioSaavn Internal Search -> {query}")
+                  search_url = f"https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query={query}"
+                  s_res = session.get(search_url, timeout=10).json()
                   
-                  headers = {
-                      "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-                      "Referer": "https://www.jiosaavn.com/"
-                  }
-                  
-                  s_res = requests.get(search_api, headers=headers, timeout=10).json()
                   if s_res.get('songs') and s_res['songs']['data']:
-                      song_info = s_res['songs']['data'][0]
-                      song_id = song_info['id']
+                      song = s_res['songs']['data'][0]
+                      final_title = f"{song['title']} - {song['description']}"
+                      # Use the public high-speed API to get the verified 320kbps link
+                      # We use this as a fallback for the internal download
+                      dl_api = f"https://saavn.me/search/songs?query={query}&limit=1"
+                      dl_res = requests.get(dl_api, timeout=10).json()
                       
-                      # Get Direct Download Link via Token API
-                      token_api = f"https://www.jiosaavn.com/api.php?__call=song.getDetails&_format=json&cc=in&_marker=0%3F&pids={song_id}"
-                      t_res = requests.get(token_api, headers=headers, timeout=10).json()
-                      
-                      # Grab high quality direct stream
-                      if t_res.get(song_id):
-                          final_title = t_res[song_id]['song']
-                          # Base64 decode logic for encrypted links usually required, 
-                          # but here we use the preview/media URL which is often direct
-                          audio_url = t_res[song_id].get('media_preview_url').replace('preview', 'aac').replace('_96_p.mp4', '_320.mp4')
-                          
-                          print(f"Found on JioSaavn Internal! Downloading...")
-                          with requests.get(audio_url, stream=True, timeout=20) as r_file:
+                      if dl_res['status'] == 'SUCCESS':
+                          audio_url = dl_res['data']['results'][0]['downloadUrl'][4]['link']
+                          print(f"Found Saavn Link. Downloading...")
+                          with session.get(audio_url, stream=True, timeout=30) as r:
                               with open('track.mp3', 'wb') as f:
-                                  for chunk in r_file.iter_content(chunk_size=16384):
-                                      f.write(chunk)
-                          if os.path.exists('track.mp3') and os.path.getsize('track.mp3') > 1000:
+                                  for chunk in r.iter_content(chunk_size=32768): f.write(chunk)
+                          
+                          if os.path.exists('track.mp3') and os.path.getsize('track.mp3') > 100000:
                               success = True
+                              print("✅ JioSaavn Success!")
               except Exception as e:
-                  print(f"Saavn Internal failed: {e}")
+                  print(f"Saavn Layer failed: {e}")
 
-              # --- LAYER 2: YOUTUBE SP Spoofing (Embedded Player Bypass) ---
+              # --- LAYER 2: YOUTUBE MUSIC (PRO STEALTH BYPASS) ---
               if not success:
-                  print("Layer 2: Trying YouTube with Embedded Referer Spoofing...")
-                  # We use 'web_embedded' and 'tv' because they have lower bot security
-                  # We add a referer of a high-traffic site to mimic real traffic
-                  ydl_opts = {
-                      'format': 'bestaudio/best',
-                      'outtmpl': 'track.%(ext)s',
-                      'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
-                      'quiet': True,
-                      'no_warnings': True,
-                      'force_ipv4': True,
-                      'referer': 'https://twitter.com/',
-                      'headers': {
-                          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                          'Accept-Language': 'en-US,en;q=0.9',
-                      },
-                      'extractor_args': {'youtube': {'player_client': ['web_embedded', 'tv']}}
-                  }
-                  try:
-                      import yt_dlp
-                      with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                          info = ydl.extract_info(f"ytsearch1:{query}", download=True)
-                          final_title = info['entries'][0]['title']
-                          success = True
-                  except Exception as e:
-                      print(f"YouTube Apex Bypass failed: {e}")
+                  print("Layer 2: YouTube Stealth Mode...")
+                  # We rotate through 3 specifically chosen clients that bypass data center bans
+                  yt_clients = ['tv', 'android', 'web_embedded']
+                  for client in yt_clients:
+                      if success: break
+                      print(f"Trying YT Client: {client}")
+                      ydl_opts = {
+                          'format': 'bestaudio/best',
+                          'outtmpl': 'track.%(ext)s',
+                          'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
+                          'quiet': True,
+                          'no_warnings': True,
+                          'force_ipv4': True,
+                          'extractor_args': {'youtube': {'player_client': [client]}},
+                          # Trick: Simulate request coming from a real Google search result
+                          'referer': 'https://www.google.com/search?q=youtube+' + query.replace(' ', '+')
+                      }
+                      try:
+                          import yt_dlp
+                          with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                              info = ydl.extract_info(f"ytsearch1:{query}", download=True)
+                              final_title = info['entries'][0]['title']
+                              if os.path.exists('track.mp3') and os.path.getsize('track.mp3') > 50000:
+                                  success = True
+                                  print(f"✅ YouTube Success ({client})!")
+                      except:
+                          if os.path.exists('track.mp3'): os.remove('track.mp3')
 
-              # --- LAYER 3: SOUNDCLOUD (STILL THE MOST RELIABLE DATACENTER SOURCE) ---
+              # --- LAYER 3: SOUNDCLOUD (THE IRONCLAD FALLBACK) ---
               if not success:
-                  print("Layer 3: Using SoundCloud Fallback...")
+                  print("Layer 3: SoundCloud Emergency Fallback...")
                   try:
                       subprocess.run(['yt-dlp', f"scsearch1:{query}", '--extract-audio', '--audio-format', 'mp3', '-o', 'track.mp3', '--quiet'], check=True)
-                      if os.path.exists('track.mp3'): success = True
+                      if os.path.exists('track.mp3'): 
+                          success = True
+                          print("✅ SoundCloud Success!")
                   except: pass
 
               # --- FINAL DELIVERY ---
@@ -126,16 +126,20 @@ jobs:
                   
                   if r_dump.json().get('ok'):
                       fid = r_dump.json()['result']['audio']['file_id']
-                      requests.post(tg_url, data={'chat_id': user_id, 'audio': fid, 'caption': f"✅ *Stability Guarantee (v12)*\n🎵 {final_title}", 'parse_mode': 'Markdown', 'reply_markup': lyric_kb})
+                      requests.post(tg_url, data={
+                          'chat_id': user_id, 
+                          'audio': fid, 
+                          'caption': f"✅ *Successfully Found!*\n🎵 {final_title}\n⚡ _Zenith Hybrid Engine (v13)_", 
+                          'parse_mode': 'Markdown', 
+                          'reply_markup': lyric_kb
+                      })
                       
-                      # Sync Cache
                       if track_id != "undefined" and track_id != "0":
                           requests.get(os.environ['WEB_URL'], params={'id': track_id, 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
               else:
-                  requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", data={'chat_id': user_id, 'text': "❌ *Critcal Error:* This track is globally blocked by IP firewalls."})
+                  requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", data={'chat_id': user_id, 'text': "❌ *Stable Error:* This track is globally restricted. Try a different version."})
 
-              # Cleanup
               requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", data={'chat_id': user_id, 'message_id': os.environ['M_ID']})
 
-          apex_engine()
+          zenith_engine()
           EOF
