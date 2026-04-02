@@ -1,25 +1,25 @@
-name: TBL Apex Music Engine (v14.0 - Stealth Scraper)
+name: TBL JioSaavn Elite Engine (v15.0 - Ultra Stable)
 on:
   repository_dispatch:
     types: [process_music]
 
 jobs:
-  stealth-delivery:
+  saavn-delivery:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
-      - name: 🛠 Setup Stealth Environment
+      - name: 🛠 Setup Environment
         uses: federicocarboni/setup-ffmpeg@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 🚀 Install Scraper Dependencies
         run: |
-          python3 -m pip install -U yt-dlp requests beautifulsoup4
+          python3 -m pip install -U requests
           echo "/usr/bin" >> $GITHUB_PATH
 
-      - name: 📥 Advanced Waterfall Scraping
+      - name: 📥 JioSaavn Internal Extraction
         env:
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           DUMP_ID: ${{ secrets.TG_DUMP_CHAT_ID }}
@@ -30,10 +30,9 @@ jobs:
           WEB_URL: "https://prod-api.telebothost.com/ownlang/webapp/15614049/save_cache"
         run: |
           python3 - <<EOF
-          import os, requests, subprocess, json, sys, time, re
-          from bs4 import BeautifulSoup
+          import os, requests, json, sys, time
 
-          def stealth_engine():
+          def saavn_elite_engine():
               query = os.environ['QUERY']
               bot_token = os.environ['BOT_TOKEN']
               user_id = os.environ['U_ID']
@@ -42,113 +41,86 @@ jobs:
               
               success = False
               final_title = query
-              
-              # CREATE A STEALTH SESSION
-              # This mimics a real mobile device to bypass Cloudflare and Bot-Shields
+              audio_url = None
+
+              # Unified Stealth Session
               s = requests.Session()
               s.headers.update({
                   "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-                  "Accept-Language": "en-US,en;q=0.9",
-                  "Referer": "https://www.google.com/"
+                  "Referer": "https://www.jiosaavn.com/"
               })
 
-              # --- LAYER 1: JIOSAAVN SCRAPER (Mimic Mobile App) ---
+              # --- LAYER 1: JIOSAAVN AUTOCOMPLETE API (FASTEST) ---
               try:
-                  print(f"Layer 1: Scraping JioSaavn for {query}")
-                  # We 'land' on the home page first to get cookies
-                  s.get("https://www.jiosaavn.com/")
-                  
-                  # We use the internal autocomplete search used by real phones
+                  print(f"Searching JioSaavn for: {query}")
                   search_url = f"https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&query={query}"
                   res = s.get(search_url, timeout=10).json()
                   
                   if res.get('songs') and res['songs']['data']:
-                      song = res['songs']['data'][0]
-                      final_title = f"{song['title']} - {song['description']}"
-                      # Use a high-speed verification to get the direct 320kbps stream
-                      # We pivot to the public API only for the final link fetch
+                      song_data = res['songs']['data'][0]
+                      final_title = f"{song_data['title']} - {song_data['description']}"
+                      
+                      # Layer 1.1: Pivot to High-Speed Download API
+                      # This bypasses the need for manual decryption
                       dl_api = f"https://saavn.me/search/songs?query={query}&limit=1"
                       dl_res = requests.get(dl_api, timeout=10).json()
                       
-                      if dl_res['status'] == 'SUCCESS':
+                      if dl_res['status'] == 'SUCCESS' and dl_res['data']['results']:
                           audio_url = dl_res['data']['results'][0]['downloadUrl'][4]['link']
-                          print(f"Found on JioSaavn! Scraping stream...")
-                          with s.get(audio_url, stream=True, timeout=30) as r:
-                              with open('track.mp3', 'wb') as f:
-                                  for chunk in r.iter_content(chunk_size=65536): f.write(chunk)
-                          
-                          if os.path.exists('track.mp3') and os.path.getsize('track.mp3') > 100000:
-                              success = True
-                              print("✅ JioSaavn Scraping Successful!")
+                          print("✅ Found high-quality stream (320kbps)")
               except Exception as e:
-                  print(f"Saavn Scraper failed: {e}")
+                  print(f"Primary API Layer failed: {e}")
 
-              # --- LAYER 2: YOUTUBE MOBILE-STEALTH (Bypass PoToken/Sign-in) ---
-              if not success:
-                  print("Layer 2: YouTube Mobile-Stealth Mode...")
-                  # We rotate clients but add 'Mobile-Discovery' headers
-                  clients = ['android', 'ios', 'tv']
-                  for client in clients:
-                      if success: break
-                      print(f"Trying YT Stealth Client: {client}")
-                      ydl_opts = {
-                          'format': 'bestaudio/best',
-                          'outtmpl': 'track.%(ext)s',
-                          'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
-                          'quiet': True,
-                          'no_warnings': True,
-                          'force_ipv4': True,
-                          'extractor_args': {'youtube': {'player_client': [client]}},
-                          'referer': 'https://m.youtube.com/',
-                          'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1'
-                      }
-                      try:
-                          import yt_dlp
-                          with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                              info = ydl.extract_info(f"ytsearch1:{query}", download=True)
-                              final_title = info['entries'][0]['title']
-                              if os.path.exists('track.mp3') and os.path.getsize('track.mp3') > 50000:
-                                  success = True
-                                  print(f"✅ YouTube Stealth Success ({client})!")
-                      except:
-                          if os.path.exists('track.mp3'): os.remove('track.mp3')
-
-              # --- LAYER 3: SOUNDCLOUD SCRAPER (Bulletproof) ---
-              if not success:
-                  print("Layer 3: SoundCloud Scraper Fallback...")
+              # --- LAYER 2: SECONDARY SEARCH PIVOT ---
+              if not audio_url:
                   try:
-                      subprocess.run(['yt-dlp', f"scsearch1:{query}", '--extract-audio', '--audio-format', 'mp3', '-o', 'track.mp3', '--quiet'], check=True)
-                      if os.path.exists('track.mp3'): 
-                          success = True
-                          print("✅ SoundCloud Success!")
+                      print("Switching to Secondary Search...")
+                      search_api_v2 = f"https://jiosaavn-api-beta.vercel.app/search/songs?query={query}&limit=1"
+                      res_v2 = requests.get(search_api_v2, timeout=10).json()
+                      if res_v2['status'] == 'SUCCESS':
+                          audio_url = res_v2['data']['results'][0]['downloadUrl'][4]['link']
+                          final_title = res_v2['data']['results'][0]['name']
+                          print("✅ Found via Secondary API")
                   except: pass
 
-              # --- FINAL DELIVERY ---
-              if success and os.path.exists('track.mp3'):
+              # --- DOWNLOAD & VERIFY ---
+              if audio_url:
+                  print("Downloading audio buffer...")
+                  with s.get(audio_url, stream=True, timeout=30) as r:
+                      with open('track.mp3', 'wb') as f:
+                          for chunk in r.iter_content(chunk_size=65536): f.write(chunk)
+                  
+                  if os.path.exists('track.mp3') and os.path.getsize('track.mp3') > 100000:
+                      success = True
+
+              # --- DELIVERY ---
+              if success:
                   tg_url = f"https://api.telegram.org/bot{bot_token}/sendAudio"
                   lyric_kb = json.dumps({"inline_keyboard": [[{"text": "📝 View Lyrics", "callback_data": f"lyr_{track_id}"}]]})
 
-                  with open('track.mp3', 'rb') as audio_file:
-                      # Upload to storage channel
-                      r_dump = requests.post(tg_url, data={'chat_id': dump_id, 'title': final_title}, files={'audio': audio_file})
+                  with open('track.mp3', 'rb') as f:
+                      # 1. Store in Channel
+                      r_dump = requests.post(tg_url, data={'chat_id': dump_id, 'title': final_title}, files={'audio': f})
                   
                   if r_dump.json().get('ok'):
                       fid = r_dump.json()['result']['audio']['file_id']
+                      # 2. Instant Delivery to User
                       requests.post(tg_url, data={
                           'chat_id': user_id, 
                           'audio': fid, 
-                          'caption': f"✅ *Scraped Successfully!*\n🎵 {final_title}\n⚡ _Apex Stealth Engine_", 
+                          'caption': f"✅ *Successfully Found!*\n🎵 {final_title}\n⚡ _JioSaavn Elite Engine_", 
                           'parse_mode': 'Markdown', 
                           'reply_markup': lyric_kb
                       })
                       
-                      # Sync Cache
+                      # 3. Cache Sync
                       if track_id != "undefined" and track_id != "0":
                           requests.get(os.environ['WEB_URL'], params={'id': track_id, 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
               else:
-                  requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", data={'chat_id': user_id, 'text': "❌ *Stable Error:* Track unavailable on all server layers."})
+                  requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", data={'chat_id': user_id, 'text': "❌ *Stable Error:* Track not found on JioSaavn servers."})
 
+              # Cleanup UI
               requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", data={'chat_id': user_id, 'message_id': os.environ['M_ID']})
 
-          stealth_engine()
+          saavn_elite_engine()
           EOF
