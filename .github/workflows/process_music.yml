@@ -1,4 +1,4 @@
-name: TBL Hybrid Turbo Engine (v9.1 - Ironclad + Lyrics)
+name: TBL Hybrid Siege Engine (v11.0 - Ultra Stable)
 on:
   repository_dispatch:
     types: [process_music]
@@ -6,7 +6,7 @@ on:
 jobs:
   hybrid-delivery:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15 # Maximum time allowed for difficult extractions
 
     steps:
       - name: 🛠 Setup FFmpeg
@@ -19,7 +19,7 @@ jobs:
           python3 -m pip install -U yt-dlp requests
           echo "/usr/bin" >> $GITHUB_PATH
 
-      - name: 📥 Ironclad Waterfall Extraction
+      - name: 📥 Ironclad Siege Extraction
         env:
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           DUMP_ID: ${{ secrets.TG_DUMP_CHAT_ID }}
@@ -32,7 +32,7 @@ jobs:
           python3 - <<EOF
           import os, requests, subprocess, json, sys, time
 
-          def ironclad_engine():
+          def siege_engine():
               query = os.environ['QUERY']
               bot_token = os.environ['BOT_TOKEN']
               user_id = os.environ['U_ID']
@@ -40,89 +40,105 @@ jobs:
               track_id = os.environ.get('T_ID', '0')
               
               success = False
-              final_title = "Audio"
+              final_title = query
+              
+              # Realistic Browser Headers for JioSaavn
+              headers = {
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                  "Accept": "application/json",
+                  "Referer": "https://www.jiosaavn.com/"
+              }
 
-              # --- LAYER 1: JIOSAAVN ---
-              try:
-                  print(f"Layer 1: Searching JioSaavn for {query}")
-                  api = f"https://saavn.me/search/songs?query={query}&limit=1"
-                  r = requests.get(api, timeout=10).json()
-                  if r['status'] == 'SUCCESS' and r['data']['results']:
-                      res = r['data']['results'][0]
-                      final_title = f"{res['name']} - {res['primaryArtists']}"
-                      audio_url = res['downloadUrl'][4]['link']
-                      
-                      with requests.get(audio_url, stream=True) as r_file:
-                          with open('track.mp3', 'wb') as f:
-                              for chunk in r_file.iter_content(chunk_size=8192):
-                                  f.write(chunk)
-                      if os.path.exists('track.mp3'): success = True
-              except Exception as e:
-                  print(f"Saavn Layer failed: {e}")
-
-              # --- LAYER 2: YOUTUBE MUSIC ---
-              if not success:
-                  print("Layer 2: Trying YouTube Music...")
-                  ydl_opts = {
-                      'format': 'bestaudio/best',
-                      'outtmpl': 'track.%(ext)s',
-                      'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
-                      'quiet': True,
-                      'no_warnings': True,
-                      'force_ipv4': True,
-                      'extractor_args': {'youtube': {'player_client': ['android_vr', 'ios']}}
-                  }
+              # --- STEP 1: JIOSAAVN MULTI-API ATTACK ---
+              saavn_apis = [
+                  f"https://saavn.me/search/songs?query={query}&limit=1",
+                  f"https://jiosaavn-api-beta.vercel.app/search/songs?query={query}&limit=1"
+              ]
+              
+              for api in saavn_apis:
+                  if success: break
                   try:
-                      import yt_dlp
-                      with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                          info = ydl.extract_info(f"ytsearch1:{query}", download=True)
-                          final_title = info['entries'][0]['title']
-                          success = True
+                      print(f"Trying Saavn API: {api}")
+                      r = requests.get(api, headers=headers, timeout=15)
+                      data = r.json()
+                      if data.get('status') == 'SUCCESS' and data['data']['results']:
+                          res = data['data']['results'][0]
+                          final_title = f"{res['name']} - {res['primaryArtists']}"
+                          audio_url = res['downloadUrl'][4]['link']
+                          
+                          with requests.get(audio_url, stream=True, timeout=20) as r_file:
+                              with open('track.mp3', 'wb') as f:
+                                  for chunk in r_file.iter_content(chunk_size=16384):
+                                      f.write(chunk)
+                          if os.path.exists('track.mp3') and os.path.getsize('track.mp3') > 1000:
+                              success = True
+                              print("✅ Saavn Success!")
                   except Exception as e:
-                      print(f"YouTube Layer failed: {e}")
+                      print(f"Saavn API failed: {e}")
 
-              # --- LAYER 3: SOUNDCLOUD ---
+              # --- STEP 2: YOUTUBE CLIENT ROTATION SIEGE ---
+              # We try different clients sequentially if 'Sign in' error appears
               if not success:
-                  print("Layer 3: Trying SoundCloud...")
+                  # Removed characters that break YT Search
+                  clean_q = "".join(e for e in query if e.isalnum() or e.isspace())
+                  clients = ['android_vr', 'ios', 'tv', 'web_embedded', 'mweb']
+                  
+                  for client in clients:
+                      if success: break
+                      print(f"Trying YouTube with client: {client}")
+                      ydl_opts = {
+                          'format': 'bestaudio/best',
+                          'outtmpl': 'track.%(ext)s',
+                          'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
+                          'quiet': True,
+                          'no_warnings': True,
+                          'force_ipv4': True,
+                          'extractor_args': {'youtube': {'player_client': [client]}}
+                      }
+                      try:
+                          import yt_dlp
+                          with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                              info = ydl.extract_info(f"ytsearch1:{clean_q}", download=True)
+                              final_title = info['entries'][0]['title']
+                              if os.path.exists('track.mp3'):
+                                  success = True
+                                  print(f"✅ YouTube Success with {client}!")
+                      except Exception as e:
+                          print(f"YouTube {client} failed: {e}")
+                          if os.path.exists('track.mp3'): os.remove('track.mp3')
+
+              # --- STEP 3: SOUNDCLOUD FINAL STAND ---
+              if not success:
+                  print("Trying SoundCloud Fallback...")
                   try:
                       subprocess.run(['yt-dlp', f"scsearch1:{query}", '--extract-audio', '--audio-format', 'mp3', '-o', 'track.mp3', '--quiet'], check=True)
-                      if os.path.exists('track.mp3'): success = True
+                      if os.path.exists('track.mp3'): 
+                          success = True
+                          print("✅ SoundCloud Success!")
                   except: pass
 
-              # --- DELIVERY SECTION (LYRIC ENABLED) ---
+              # --- DELIVERY & CACHE ---
               if success and os.path.exists('track.mp3'):
-                  print(f"Success! Delivering: {final_title}")
                   tg_url = f"https://api.telegram.org/bot{bot_token}/sendAudio"
-                  
-                  # Create the Lyrics Button
-                  lyric_kb = json.dumps({
-                      "inline_keyboard": [[{"text": "📝 View Lyrics", "callback_data": f"lyr_{track_id}"}]]
-                  })
+                  lyric_kb = json.dumps({"inline_keyboard": [[{"text": "📝 View Lyrics", "callback_data": f"lyr_{track_id}"}]]})
 
                   with open('track.mp3', 'rb') as audio_file:
-                      # 1. Upload to storage channel
+                      # Upload to storage channel
                       r_dump = requests.post(tg_url, data={'chat_id': dump_id, 'title': final_title}, files={'audio': audio_file})
                   
                   if r_dump.json().get('ok'):
                       fid = r_dump.json()['result']['audio']['file_id']
+                      # Deliver to user
+                      requests.post(tg_url, data={'chat_id': user_id, 'audio': fid, 'caption': f"✅ *Stability Guarantee (v11)*\n🎵 {final_title}", 'parse_mode': 'Markdown', 'reply_markup': lyric_kb})
                       
-                      # 2. Forward to user with LYRIC BUTTON
-                      requests.post(tg_url, data={
-                          'chat_id': user_id, 
-                          'audio': fid, 
-                          'caption': f"✅ *Successfully Found!*\n🎵 {final_title}", 
-                          'parse_mode': 'Markdown',
-                          'reply_markup': lyric_kb
-                      })
-                      
-                      # 3. Cache Sync (GET bypasses Cloudflare)
+                      # Sync Cache
                       if track_id != "undefined" and track_id != "0":
                           requests.get(os.environ['WEB_URL'], params={'id': track_id, 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
               else:
-                  requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", data={'chat_id': user_id, 'text': "❌ *Stable Error:* Track unavailable on all sources."})
+                  requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", data={'chat_id': user_id, 'text': "❌ *Critcal Error:* Song is globally blocked or unavailable."})
 
               # Cleanup UI
               requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", data={'chat_id': user_id, 'message_id': os.environ['M_ID']})
 
-          ironclad_engine()
+          siege_engine()
           EOF
