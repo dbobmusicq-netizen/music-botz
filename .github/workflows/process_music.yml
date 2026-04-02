@@ -1,4 +1,4 @@
-name: TBL Hybrid Turbo Engine (v8.1)
+name: TBL Hybrid Turbo Engine (v9.0 - Ironclad)
 on:
   repository_dispatch:
     types: [process_music]
@@ -6,22 +6,21 @@ on:
 jobs:
   hybrid-delivery:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10 # Increased timeout for 100% completion
 
     steps:
-      - name: 🛠 Setup FFmpeg (CRITICAL FIX)
+      - name: 🛠 Setup FFmpeg
         uses: federicocarboni/setup-ffmpeg@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 🚀 Turbo Setup
+      - name: 🚀 Install Dependencies
         run: |
-          # Download yt-dlp binary
-          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
-          chmod a+rx /usr/local/bin/yt-dlp
-          python3 -m pip install -U requests
+          python3 -m pip install -U yt-dlp requests
+          # Ensure ffmpeg is in the system path for yt-dlp
+          echo "/usr/bin" >> $GITHUB_PATH
 
-      - name: 📥 Waterfall Extraction & Direct Delivery
+      - name: 📥 Ironclad Waterfall Extraction
         env:
           BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           DUMP_ID: ${{ secrets.TG_DUMP_CHAT_ID }}
@@ -32,79 +31,97 @@ jobs:
           WEB_URL: "https://prod-api.telebothost.com/ownlang/webapp/15614049/save_cache"
         run: |
           python3 - <<EOF
-          import os, requests, subprocess, json, sys, shutil
+          import os, requests, subprocess, json, sys, time
 
-          def turbo_engine():
+          def ironclad_engine():
               query = os.environ['QUERY']
               bot_token = os.environ['BOT_TOKEN']
               user_id = os.environ['U_ID']
               dump_id = os.environ['DUMP_ID']
               
-              # Find FFmpeg path dynamically
-              ffmpeg_path = shutil.which('ffmpeg') or 'ffmpeg'
-              
-              stream_url = None
-              title = "Audio"
+              success = False
+              final_title = "Audio"
 
-              # --- LAYER 1: JIOSAAVN (Lightning Fast) ---
+              # --- LAYER 1: JIOSAAVN (API-BASE) ---
               try:
+                  print(f"Layer 1: Searching JioSaavn for {query}")
                   api = f"https://saavn.me/search/songs?query={query}&limit=1"
-                  r = requests.get(api, timeout=5).json()
+                  r = requests.get(api, timeout=10).json()
                   if r['status'] == 'SUCCESS' and r['data']['results']:
                       res = r['data']['results'][0]
-                      title = f"{res['name']} - {res['primaryArtists']}"
-                      stream_url = res['downloadUrl'][4]['link']
-                      print("✅ Found on JioSaavn!")
-              except: pass
+                      final_title = f"{res['name']} - {res['primaryArtists']}"
+                      audio_url = res['downloadUrl'][4]['link']
+                      
+                      # Download using requests (very stable for direct links)
+                      print("Saavn link found. Downloading...")
+                      with requests.get(audio_url, stream=True) as r_file:
+                          with open('track.mp3', 'wb') as f:
+                              for chunk in r_file.iter_content(chunk_size=8192):
+                                  f.write(chunk)
+                      if os.path.exists('track.mp3'): success = True
+              except Exception as e:
+                  print(f"Saavn Layer failed: {e}")
 
-              # --- LAYER 2: YOUTUBE MUSIC (Android-VR Bypass) ---
-              if not stream_url:
+              # --- LAYER 2: YOUTUBE MUSIC (INTERNAL ENGINE) ---
+              if not success:
+                  print("Layer 2: Trying YouTube Music...")
+                  # We use yt-dlp directly for downloading - it handles retries and conversion perfectly
+                  ydl_opts = {
+                      'format': 'bestaudio/best',
+                      'outtmpl': 'track.%(ext)s',
+                      'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
+                      'quiet': True,
+                      'no_warnings': True,
+                      'force_ipv4': True,
+                      'extractor_args': {'youtube': {'player_client': ['android_vr', 'ios']}}
+                  }
                   try:
-                      cmd = ['yt-dlp', f"ytsearch1:{query}", '--get-url', '--get-title', '--force-ipv4', '--extractor-args', 'youtube:player_client=android_vr,ios']
-                      process = subprocess.run(cmd, capture_output=True, text=True)
-                      out = process.stdout.split('\n')
-                      if len(out) >= 2:
-                          title, stream_url = out[0], out[1]
-                          print("✅ Found on YouTube Music!")
+                      import yt_dlp
+                      with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                          info = ydl.extract_info(f"ytsearch1:{query}", download=True)
+                          final_title = info['entries'][0]['title']
+                          success = True
+                  except Exception as e:
+                      print(f"YouTube Layer failed: {e}")
+
+              # --- LAYER 3: SOUNDCLOUD (BULLETPROOF FALLBACK) ---
+              if not success:
+                  print("Layer 3: Trying SoundCloud...")
+                  try:
+                      # Direct shell call to yt-dlp for SoundCloud fallback
+                      subprocess.run(['yt-dlp', f"scsearch1:{query}", '--extract-audio', '--audio-format', 'mp3', '-o', 'track.mp3', '--quiet'], check=True)
+                      if os.path.exists('track.mp3'): success = True
                   except: pass
 
-              # --- LAYER 3: SOUNDCLOUD (Fallback) ---
-              if not stream_url:
-                  try:
-                      cmd = ['yt-dlp', f"scsearch1:{query}", '--get-url', '--get-title']
-                      process = subprocess.run(cmd, capture_output=True, text=True)
-                      out = process.stdout.split('\n')
-                      if len(out) >= 2:
-                          title, stream_url = out[0], out[1]
-                          print("✅ Found on SoundCloud!")
-                  except: pass
-
-              if not stream_url:
-                  requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", data={'chat_id': user_id, 'text': "❌ Track not found."})
-                  sys.exit(1)
-
-              # --- STREAM-PROCESSING (FFMPEG) ---
-              output_file = "track.mp3"
-              # We use the path found earlier or fallback to system 'ffmpeg'
-              convert_cmd = [ffmpeg_path, '-y', '-i', stream_url, '-vn', '-c:a', 'libmp3lame', '-q:a', '2', output_file]
-              subprocess.run(convert_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-              # --- DELIVERY & SYNC ---
-              tg_url = f"https://api.telegram.org/bot{bot_token}/sendAudio"
-              with open(output_file, 'rb') as f:
-                  r_dump = requests.post(tg_url, data={'chat_id': dump_id, 'title': title}, files={'audio': f})
-              
-              if r_dump.json().get('ok'):
-                  fid = r_dump.json()['result']['audio']['file_id']
-                  # Deliver to user
-                  requests.post(tg_url, data={'chat_id': user_id, 'audio': fid, 'caption': f"✅ *Successfully Bypassed!*\n🎵 {title}", 'parse_mode': 'Markdown'})
-                  # Update Cache
-                  tid = os.environ.get('T_ID')
-                  if tid and tid != "undefined":
-                      requests.get(os.environ['WEB_URL'], params={'id': tid, 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
+              # --- DELIVERY ---
+              if success and os.path.exists('track.mp3'):
+                  print(f"Success! Delivering: {final_title}")
+                  tg_url = f"https://api.telegram.org/bot{bot_token}/sendAudio"
+                  
+                  with open('track.mp3', 'rb') as audio_file:
+                      # 1. Upload to storage channel
+                      r_dump = requests.post(tg_url, data={'chat_id': dump_id, 'title': final_title}, files={'audio': audio_file})
+                  
+                  if r_dump.json().get('ok'):
+                      fid = r_dump.json()['result']['audio']['file_id']
+                      
+                      # 2. Forward to user (Instantly bypasses Cloudflare)
+                      requests.post(tg_url, data={
+                          'chat_id': user_id, 
+                          'audio': fid, 
+                          'caption': f"✅ *Stability Guarantee (v9)*\n🎵 {final_title}\n⚡ _High-Fidelity Audio_", 
+                          'parse_mode': 'Markdown'
+                      })
+                      
+                      # 3. Cache Sync
+                      tid = os.environ.get('T_ID')
+                      if tid and tid != "undefined":
+                          requests.get(os.environ['WEB_URL'], params={'id': tid, 'file': fid}, headers={"User-Agent":"Mozilla/5.0"})
+              else:
+                  requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", data={'chat_id': user_id, 'text': "❌ *Stable Error:* All server layers are currently blocked. Try again later."})
 
               # Cleanup UI
               requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", data={'chat_id': user_id, 'message_id': os.environ['M_ID']})
 
-          turbo_engine()
+          ironclad_engine()
           EOF
